@@ -1,0 +1,34 @@
+[
+  {
+    "name": "M5GFX",
+    "url": "https://github.com/m5stack/M5GFX.git",
+    "path": "components/M5GFX",
+    "ref": "develop",
+    "commit": "02107b828acb3eb782fccd747863638d64c876d7",
+    "patches": []
+  },
+  {
+    "name": "LGFX_Fonts",
+    "url": "https://github.com/tobozo/LGFX_Fonts.git",
+    "path": "components/LGFX_Fonts",
+    "ref": "1.1.2",
+    "commit": "253cf549fe0b1aa932be68fe06a13c3077918d61",
+    "patches": ["patches/LGFX_Fonts.patch"]
+  },
+  {
+    "name": "M5Unified",
+    "url": "https://github.com/m5stack/M5Unified.git",
+    "path": "components/M5Unified",
+    "ref": "develop",
+    "commit": "2fe93c0c64f12f916e73a0605c86bf1241c06a6b",
+    "patches": ["patches/M5Unified.patch"]
+  },
+  {
+    "name": "mooncake",
+    "url": "https://github.com/Forairaaaaa/mooncake.git",
+    "path": "components/mooncake",
+    "ref": "v2.3.3",
+    "commit": "572a7e488641f1c3f22e85d65c27f095ecf27d12",
+    "patches": []
+  }
+]

@@ -35,16 +35,12 @@ on:
 jobs:
   formatting-check:
     name: Formatting Check
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         path:
-          - check: './'    # path to include
-            exclude: ''    # path to exclude
-          #- check: 'src'
-          #  exclude: '(Fonts)' # Exclude file paths containing "Fonts"
-          #- check: 'examples'
-          #  exclude: ''
+          - check: './'
+            exclude: ''
 
     steps:
       - name: Checkout
@@ -53,7 +49,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Run clang-format style check for C/C++/Protobuf programs.
-        uses: jidicula/clang-format-action@v4.10.2 # Using include-regex 10.x or later
+        uses: jidicula/clang-format-action@v4.10.2
         with:
           clang-format-version: '18'
           check-path: ${{ matrix.path['check'] }}
