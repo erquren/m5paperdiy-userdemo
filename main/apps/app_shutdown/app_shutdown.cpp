@@ -53,12 +53,8 @@ bool areBothButtonsPressed()
 void AppShutdown::handleFactoryBoot()
 {
     esp_err_t error = nvs_flash_init();
-    if (error == ESP_ERR_NVS_NO_FREE_PAGES || error == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        error = nvs_flash_erase();
-        if (error == ESP_OK) {
-            error = nvs_flash_init();
-        }
-    }
+    // Wi-Fi credentials share this NVS partition. Never erase it automatically
+    // on an initialization error; let the user explicitly recover storage.
     if (error != ESP_OK) {
         ESP_LOGE(APP_TAG, "NVS initialization failed: %s", esp_err_to_name(error));
         return;
@@ -186,6 +182,7 @@ bool AppShutdown::showDialog()
         return false;
     }
 
+    _dialog_open.store(true, std::memory_order_release);
     auto& hal     = GetHAL();
     auto& display = hal.display;
     display.waitDisplay();
@@ -261,6 +258,7 @@ void AppShutdown::dismissDialog()
     display.waitDisplay();
     heap_caps_free(_saved_pixels);
     _saved_pixels = nullptr;
+    _dialog_open.store(false, std::memory_order_release);
 }
 
 /* -------------------------------------------------------------------------- */

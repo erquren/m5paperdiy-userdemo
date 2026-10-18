@@ -1,41 +1,26 @@
-/*
- * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
- *
- * SPDX-License-Identifier: MIT
- */
+/* SPDX-License-Identifier: MIT */
 #pragma once
-
 #include <atomic>
 #include <cstdint>
-#include <esp_event.h>
 #include <mooncake.h>
-#include <string>
-#include <vector>
+#include <network/wifi_manager.h>
 
 class AppWifiScan : public mooncake::AppAbility {
 public:
     void onCreate() override;
     void onOpen() override;
     void onRunning() override;
-
+    static bool isModal() { return _modal.load(std::memory_order_acquire); }
 private:
-    struct WifiNetwork {
-        std::string ssid;
-        std::int32_t rssi = 0;
-    };
-
-    static void wifiEventHandler(void* arg, esp_event_base_t event_base, std::int32_t event_id, void* event_data);
-
-    bool initWifi();
-    void startScan();
-    void finishScan();
-    void drawStatus(const char* text, bool large = false);
-    void drawResults();
-
-    std::vector<WifiNetwork> _networks;
-    esp_event_handler_instance_t _scan_event_instance = nullptr;
-    std::atomic<bool> _scan_done{false};
-    std::atomic<std::uint32_t> _scan_status{0};
-    bool _wifi_ready   = false;
-    bool _scan_running = false;
+    void enterSetup();
+    void leaveSetup();
+    void drawSetup(const WifiManager::Snapshot& snapshot, bool full);
+    void drawOverview(const WifiManager::Snapshot& snapshot);
+    inline static std::atomic<bool> _modal{false};
+    std::string _local_error;
+    std::uint16_t* _saved_pixels = nullptr;
+    int _saved_width = 0;
+    int _saved_height = 0;
+    std::uint32_t _revision = UINT32_MAX;
+    std::uint32_t _last_minute = UINT32_MAX;
 };

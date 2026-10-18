@@ -1,290 +1,154 @@
-/*
- * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
- *
- * SPDX-License-Identifier: MIT
- */
+/* SPDX-License-Identifier: MIT */
 #include "app_wifi_scan.h"
-
+#include <app_shutdown/app_shutdown.h>
 #include <LGFX_Fonts.hpp>
-#include <algorithm>
 #include <cstdio>
-#include <cstring>
-#include <esp_err.h>
-#include <esp_event.h>
-#include <esp_log.h>
-#include <esp_netif.h>
-#include <esp_wifi.h>
+#include <esp_heap_caps.h>
 #include <hal.h>
-#include <nvs_flash.h>
 
 namespace {
-
-constexpr char APP_TAG[] = "AppWifiScan";
-
-constexpr int WIFI_INFO_X = 121;
-constexpr int WIFI_INFO_Y = 503;
-constexpr int WIFI_INFO_W = 418 - WIFI_INFO_X;
-constexpr int WIFI_INFO_H = 715 - WIFI_INFO_Y;
-
-constexpr int WIFI_ROW_H          = 24;
-constexpr int WIFI_LIST_PADDING_X = 8;
-constexpr int WIFI_LIST_PADDING_Y = 9;
-constexpr int WIFI_RSSI_W         = 72;
-
-void requestWifiRefresh(m5gfx::epd_mode_t mode)
+std::string clipped(const std::string& text, int width)
 {
-    if (!GetHAL().isFullRedrawRequested()) {
-        GetHAL().requestRefresh(WIFI_INFO_X, WIFI_INFO_Y, WIFI_INFO_W, WIFI_INFO_H, mode);
+    std::string result = text;
+    auto& display = GetHAL().display;
+    while (!result.empty() && display.textWidth(result.c_str()) > width) {
+        std::size_t at = result.size() - 1;
+        while (at > 0 && (static_cast<unsigned char>(result[at]) & 0xc0) == 0x80) --at;
+        result.resize(at);
     }
+    return result;
 }
-
-std::string fitSsidText(const std::string& ssid, int max_width)
-{
-    auto& display    = GetHAL().display;
-    std::string text = ssid.empty() ? "<hidden>" : ssid;
-    if (display.textWidth(text.c_str()) <= max_width) {
-        return text;
-    }
-
-    while (!text.empty()) {
-        std::size_t erase_at = text.size() - 1;
-        while (erase_at > 0 && (static_cast<unsigned char>(text[erase_at]) & 0xC0) == 0x80) {
-            --erase_at;
-        }
-        text.resize(erase_at);
-        const std::string clipped = text + ".";
-        if (display.textWidth(clipped.c_str()) <= max_width) {
-            return clipped;
-        }
-    }
-    return ".";
 }
-
-}  // namespace
-
-/* -------------------------------------------------------------------------- */
-/*                              App Lifecycle                                 */
-/* -------------------------------------------------------------------------- */
-void AppWifiScan::onCreate()
-{
-    setAppInfo().name = "AppWifiScan";
-    open();
-}
-
+void AppWifiScan::onCreate() { setAppInfo().name = "AppWifiScan"; open(); }
 void AppWifiScan::onOpen()
 {
-    startScan();
+    if (WifiManager::instance().begin()) WifiManager::instance().requestScan();
+    _revision = UINT32_MAX;
 }
-
 void AppWifiScan::onRunning()
 {
-    if (!_scan_running && GetHAL().wasButtonAClicked()) {
-        startScan();
-        return;
-    }
-
-    if (!_scan_running || !_scan_done.exchange(false, std::memory_order_acquire)) {
-        return;
-    }
-
-    _scan_running = false;
-    if (_scan_status.load(std::memory_order_relaxed) != 0) {
-        esp_wifi_clear_ap_list();
-        ESP_LOGE(APP_TAG, "Wi-Fi scan failed");
-        drawStatus("SCAN FAILED");
-        return;
-    }
-    finishScan();
-}
-
-/* -------------------------------------------------------------------------- */
-/*                               Wi-Fi Driver                                 */
-/* -------------------------------------------------------------------------- */
-void AppWifiScan::wifiEventHandler(void* arg, esp_event_base_t event_base, std::int32_t event_id, void* event_data)
-{
-    if (event_base != WIFI_EVENT || event_id != WIFI_EVENT_SCAN_DONE || event_data == nullptr) {
-        return;
-    }
-
-    auto* app              = static_cast<AppWifiScan*>(arg);
-    const auto* scan_event = static_cast<const wifi_event_sta_scan_done_t*>(event_data);
-    app->_scan_status.store(scan_event->status, std::memory_order_relaxed);
-    app->_scan_done.store(true, std::memory_order_release);
-}
-
-bool AppWifiScan::initWifi()
-{
-    esp_err_t error = nvs_flash_init();
-    if (error == ESP_ERR_NVS_NO_FREE_PAGES || error == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(nvs_flash_erase());
-        error = nvs_flash_init();
-    }
-    if (error != ESP_OK) {
-        ESP_LOGE(APP_TAG, "NVS initialization failed: %s", esp_err_to_name(error));
-        return false;
-    }
-
-    error = esp_netif_init();
-    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(APP_TAG, "esp_netif initialization failed: %s", esp_err_to_name(error));
-        return false;
-    }
-
-    error = esp_event_loop_create_default();
-    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(APP_TAG, "Event loop initialization failed: %s", esp_err_to_name(error));
-        return false;
-    }
-
-    wifi_init_config_t wifi_config = WIFI_INIT_CONFIG_DEFAULT();
-    error                          = esp_wifi_init(&wifi_config);
-    if (error != ESP_OK) {
-        ESP_LOGE(APP_TAG, "Wi-Fi initialization failed: %s", esp_err_to_name(error));
-        return false;
-    }
-
-    if (esp_wifi_set_storage(WIFI_STORAGE_RAM) != ESP_OK || esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK ||
-        esp_wifi_start() != ESP_OK) {
-        ESP_LOGE(APP_TAG, "Wi-Fi station startup failed");
-        return false;
-    }
-
-    error = esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_SCAN_DONE, &AppWifiScan::wifiEventHandler, this,
-                                                &_scan_event_instance);
-    if (error != ESP_OK) {
-        ESP_LOGE(APP_TAG, "Scan event registration failed: %s", esp_err_to_name(error));
-        return false;
-    }
-
-    _wifi_ready = true;
-    return true;
-}
-
-/* -------------------------------------------------------------------------- */
-/*                               Scan Control                                 */
-/* -------------------------------------------------------------------------- */
-void AppWifiScan::startScan()
-{
-    if (_scan_running) {
-        return;
-    }
-    if (!_wifi_ready && !initWifi()) {
-        drawStatus("WIFI INIT FAILED");
-        return;
-    }
-
-    wifi_scan_config_t scan_config   = {};
-    scan_config.show_hidden          = true;
-    scan_config.scan_type            = WIFI_SCAN_TYPE_ACTIVE;
-    scan_config.scan_time.active.min = 0;
-    scan_config.scan_time.active.max = 120;
-
-    _scan_done.store(false, std::memory_order_relaxed);
-    const esp_err_t error = esp_wifi_scan_start(&scan_config, false);
-    if (error != ESP_OK) {
-        ESP_LOGE(APP_TAG, "Unable to start Wi-Fi scan: %s", esp_err_to_name(error));
-        drawStatus("SCAN START FAILED");
-        return;
-    }
-
-    _scan_running = true;
-    drawStatus("SCANNING...", true);
-}
-
-void AppWifiScan::finishScan()
-{
-    std::uint16_t record_count = 0;
-    esp_err_t error            = esp_wifi_scan_get_ap_num(&record_count);
-    if (error != ESP_OK) {
-        ESP_LOGE(APP_TAG, "Unable to read scan count: %s", esp_err_to_name(error));
-        esp_wifi_clear_ap_list();
-        drawStatus("SCAN FAILED");
-        return;
-    }
-
-    std::vector<wifi_ap_record_t> records(record_count);
-    if (record_count > 0) {
-        error = esp_wifi_scan_get_ap_records(&record_count, records.data());
-        if (error != ESP_OK) {
-            ESP_LOGE(APP_TAG, "Unable to read scan results: %s", esp_err_to_name(error));
-            esp_wifi_clear_ap_list();
-            drawStatus("SCAN FAILED");
-            return;
+    auto& hal = GetHAL();
+    auto& wifi = WifiManager::instance();
+    wifi.tick();
+    // Keep networking alive, but never paint over the shutdown overlay.
+    if (AppShutdown::isDialogOpen() || hal.isShutdownInProgress()) return;
+    if (isModal()) {
+        // Restore the normal screen before the existing A+B shutdown dialog opens.
+        if ((hal.isButtonPressed(ButtonId::A) && hal.isButtonPressed(ButtonId::B)) ||
+            hal.wasButtonBClicked() || hal.wasButtonALongPressed()) {
+            wifi.stopProvisioning();
         }
-    } else {
-        esp_wifi_clear_ap_list();
+        if (!wifi.provisioning()) leaveSetup();
+    } else if (hal.wasButtonALongPressed()) {
+        enterSetup();
+    } else if (hal.wasButtonAClicked()) {
+        _local_error.clear();
+        wifi.requestScan();
     }
-
-    _networks.clear();
-    _networks.reserve(record_count);
-    for (std::uint16_t i = 0; i < record_count; ++i) {
-        char ssid[sizeof(records[i].ssid) + 1] = {};
-        std::memcpy(ssid, records[i].ssid, sizeof(records[i].ssid));
-        _networks.push_back({ssid, records[i].rssi});
+    auto snapshot = wifi.snapshot();
+    if (isModal()) {
+        const auto minutes = (snapshot.seconds_remaining + 59) / 60;
+        if (snapshot.revision != _revision || minutes != _last_minute) {
+            drawSetup(snapshot, false);
+            _last_minute = minutes;
+        }
+    } else if (snapshot.revision != _revision) {
+        drawOverview(snapshot);
     }
-    std::sort(_networks.begin(), _networks.end(),
-              [](const WifiNetwork& left, const WifiNetwork& right) { return left.rssi > right.rssi; });
-
-    ESP_LOGI(APP_TAG, "Wi-Fi scan complete: %u networks", record_count);
-    drawResults();
+    _revision = snapshot.revision;
 }
-
-/* -------------------------------------------------------------------------- */
-/*                              Scan Rendering                                */
-/* -------------------------------------------------------------------------- */
-void AppWifiScan::drawStatus(const char* text, bool large)
+void AppWifiScan::enterSetup()
+{
+    auto& hal = GetHAL();
+    auto& d = hal.display;
+    _local_error.clear();
+    _saved_width = d.width(); _saved_height = d.height();
+    _saved_pixels = static_cast<std::uint16_t*>(heap_caps_malloc(
+        static_cast<std::size_t>(_saved_width) * _saved_height * sizeof(std::uint16_t),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!_saved_pixels) {
+        // Do not consume scarce internal Wi-Fi heap for a full-screen backup.
+        _local_error = "Setup needs free PSRAM";
+        _revision = UINT32_MAX;
+        return;
+    }
+    {
+        DisplayGuard guard(hal);
+        _modal.store(true, std::memory_order_release);
+        d.waitDisplay();
+        d.readRect(0, 0, _saved_width, _saved_height, _saved_pixels);
+    }
+    hal.suppressButtonActionsUntilRelease();
+    if (!WifiManager::instance().startProvisioning()) { leaveSetup(); return; }
+    _last_minute = UINT32_MAX;
+    drawSetup(WifiManager::instance().snapshot(), true);
+}
+void AppWifiScan::leaveSetup()
+{
+    auto& hal = GetHAL();
+    if (_saved_pixels) {
+        DisplayGuard guard(hal);
+        hal.display.waitDisplay();
+        hal.display.pushImage(0, 0, _saved_width, _saved_height, _saved_pixels);
+        hal.requestFullRedraw(m5gfx::epd_mode_t::epd_quality);
+        _modal.store(false, std::memory_order_release);
+        heap_caps_free(_saved_pixels); _saved_pixels = nullptr;
+    }
+    _modal.store(false, std::memory_order_release);
+    hal.suppressButtonActionsUntilRelease();
+    _revision = UINT32_MAX;
+}
+void AppWifiScan::drawSetup(const WifiManager::Snapshot& s, bool full)
 {
     auto& hal = GetHAL();
     DisplayGuard guard(hal);
-    auto& display = hal.display;
-    display.setEpdMode(m5gfx::epd_mode_t::epd_text);
-    display.fillRect(WIFI_INFO_X, WIFI_INFO_Y, WIFI_INFO_W, WIFI_INFO_H, TFT_WHITE);
-    display.setTextColor(TFT_BLACK, TFT_WHITE);
-    display.setTextDatum(middle_center);
-    display.setTextSize(1.0f);
-    display.setFont(large ? &fonts::lvFontMontserrat20 : &fonts::lvFontMontserrat18);
-    display.setClipRect(WIFI_INFO_X, WIFI_INFO_Y, WIFI_INFO_W, WIFI_INFO_H);
-    display.drawString(text, WIFI_INFO_X + WIFI_INFO_W / 2, WIFI_INFO_Y + WIFI_INFO_H / 2);
-    display.clearClipRect();
-    requestWifiRefresh(m5gfx::epd_mode_t::epd_text);
-}
-
-void AppWifiScan::drawResults()
-{
-    auto& hal = GetHAL();
-    DisplayGuard guard(hal);
-    auto& display = hal.display;
-    display.setEpdMode(m5gfx::epd_mode_t::epd_quality);
-    display.fillRect(WIFI_INFO_X, WIFI_INFO_Y, WIFI_INFO_W, WIFI_INFO_H, TFT_WHITE);
-    display.setTextColor(TFT_BLACK, TFT_WHITE);
-    display.setTextSize(1.0f);
-    display.setFont(&fonts::lvFontMontserrat18);
-    display.setClipRect(WIFI_INFO_X, WIFI_INFO_Y, WIFI_INFO_W, WIFI_INFO_H);
-
-    if (_networks.empty()) {
-        display.setTextDatum(middle_center);
-        display.drawString("NO NETWORKS", WIFI_INFO_X + WIFI_INFO_W / 2, WIFI_INFO_Y + WIFI_INFO_H / 2);
-    } else {
-        const int visible_rows = (WIFI_INFO_H - WIFI_LIST_PADDING_Y * 2) / WIFI_ROW_H;
-        const int rssi_right   = WIFI_INFO_X + WIFI_INFO_W - 8;
-        const int ssid_x       = WIFI_INFO_X + WIFI_LIST_PADDING_X;
-        const int ssid_w       = rssi_right - WIFI_RSSI_W - ssid_x - 4;
-
-        for (int row = 0; row < visible_rows && row < static_cast<int>(_networks.size()); ++row) {
-            const auto& network    = _networks[row];
-            const int row_y        = WIFI_INFO_Y + WIFI_LIST_PADDING_Y + row * WIFI_ROW_H;
-            const int row_center_y = row_y + WIFI_ROW_H / 2;
-            const std::string ssid = fitSsidText(network.ssid, ssid_w);
-            char rssi_text[16]     = {};
-            std::snprintf(rssi_text, sizeof(rssi_text), "%lddBm", static_cast<long>(network.rssi));
-
-            display.setTextDatum(middle_left);
-            display.drawString(ssid.c_str(), ssid_x, row_center_y);
-            display.setTextDatum(middle_right);
-            display.drawString(rssi_text, rssi_right, row_center_y);
-        }
+    auto& d = hal.display;
+    d.setTextColor(TFT_BLACK, TFT_WHITE); d.setTextDatum(middle_center); d.setTextSize(1);
+    if (full) {
+        d.fillScreen(TFT_WHITE);
+        d.setFont(&fonts::lvFontMontserrat28); d.drawString("WI-FI SETUP", 270, 42);
+        d.setFont(&fonts::lvFontMontserrat18); d.drawString("1. Scan to join the device hotspot",270,88);
+        std::string qr = "WIFI:T:WPA;S:" + s.ap_ssid + ";P:" + s.ap_password + ";;";
+        d.qrcode(qr.c_str(),150,119,240,5,true);
+        d.setFont(&fonts::lvFontMontserrat20); d.drawString(s.ap_ssid.c_str(),270,393);
+        std::string password = "Password: " + s.ap_password;
+        d.drawString(password.c_str(),270,427);
+        d.setFont(&fonts::lvFontMontserrat18); d.drawString("2. Open the setup page",270,477);
+        d.qrcode("http://192.168.4.1",190,508,160,3,true);
+        d.drawString("http://192.168.4.1",270,697);
+        d.setFont(&fonts::lvFontMontserrat14);
+        d.drawString("If your phone says no internet, stay connected.",270,735);
+        d.drawString("Choose your 2.4 GHz Wi-Fi in the phone page.",270,762);
+        d.drawString("B: exit     A+B: existing power-off controls",270,918);
     }
-
-    display.clearClipRect();
-    requestWifiRefresh(m5gfx::epd_mode_t::epd_quality);
+    d.fillRect(12,790,516,105,TFT_WHITE);
+    d.setFont(&fonts::lvFontMontserrat18);
+    d.drawString(clipped(s.message,500).c_str(),270,815);
+    d.setFont(&fonts::lvFontMontserrat14);
+    char text[80];
+    std::snprintf(text,sizeof(text),"Setup closes after %lu min of inactivity",
+                  static_cast<unsigned long>((s.seconds_remaining+59)/60));
+    d.drawString(text,270,862);
+    if (full) hal.requestFullRedraw(m5gfx::epd_mode_t::epd_quality);
+    else hal.requestRefresh(12,790,516,105,m5gfx::epd_mode_t::epd_text);
+}
+void AppWifiScan::drawOverview(const WifiManager::Snapshot& s)
+{
+    auto& hal = GetHAL(); DisplayGuard guard(hal); auto& d = hal.display;
+    constexpr int x=121,y=503,w=297,h=212;
+    d.fillRect(x,y,w,h,TFT_WHITE); d.setClipRect(x,y,w,h);
+    d.setTextColor(TFT_BLACK,TFT_WHITE); d.setTextDatum(top_left); d.setTextSize(1);
+    d.setFont(&fonts::lvFontMontserrat14);
+    d.drawString("Hold A 3s: Wi-Fi setup",x+6,y+6);
+    d.drawString(clipped(_local_error.empty() ? s.message : _local_error,w-12).c_str(),x+6,y+31);
+    d.setFont(&fonts::lvFontMontserrat16);
+    if (!s.ssid.empty()) d.drawString(clipped(s.ssid,w-12).c_str(),x+6,y+53);
+    int row=0;
+    for (const auto& net:s.networks) {
+        if (row==5) break;
+        char signal[20]; std::snprintf(signal,sizeof(signal),"%d",net.rssi);
+        d.drawString(clipped(net.ssid.empty()?"<hidden>":net.ssid,w-65).c_str(),x+6,y+80+row*24);
+        d.drawString(signal,x+w-46,y+80+row*24); ++row;
+    }
+    d.clearClipRect(); hal.requestRefresh(x,y,w,h,m5gfx::epd_mode_t::epd_text);
 }

@@ -1,0 +1,27 @@
+PASS short A retains 800-ms action delay
+PASS short B retains 800-ms action delay
+PASS A fires once at three seconds while still held, no release click
+PASS release before threshold cannot fire during release debounce
+PASS A at threshold then released produces only long event
+PASS debounce rejects press and release chatter
+PASS holding B alone never produces long A
+PASS chord before three seconds cancels A timer until full release
+PASS B pressed at A threshold blocks long event during chord debounce
+PASS chord clears already pending long A and suppresses its short release
+PASS B first then chord never rearms long A while A stays down
+PASS unarmed chord keeps existing last-release B behavior
+PASS simultaneous unarmed chord release keeps existing B preference
+PASS armed shutdown chord cancellation produces no button actions
+PASS suppression clears pending short actions and permits a later press
+PASS suppression during A hold cancels long and short until release
+PASS suppression during initial press debounce waits for full release
+PASS provisioning entry/exit suppression does not leak the release
+PASS suppression clears an unconsumed long event
+PASS long event remains consumable after release and counts as interaction
+PASS shutdown cancels queued actions and disables long press
+PASS shutdown clears a pending long event
+PASS short deadline works across tick rollover
+PASS long threshold works across tick rollover
+PASS A already held when task starts is recognized
+PASS initial chord cannot trigger long A after B release
+26 production button tests passed

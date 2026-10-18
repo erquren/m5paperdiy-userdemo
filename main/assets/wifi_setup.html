@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<title>PaperDIY · Wi-Fi 设置</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#1e302c;background:#f5f5ee;font-synthesis:none;line-height:1.6}
+*{box-sizing:border-box}body{margin:0}main{width:min(100% - 36px,480px);margin:0 auto;padding:32px 0 max(28px,env(safe-area-inset-bottom))}.brand{font-size:12px;font-weight:700;letter-spacing:.16em;color:#61736b;display:flex;align-items:center;gap:9px}.brand-mark{width:19px;height:24px;border:2px solid currentColor;border-radius:3px;display:inline-block;position:relative}.brand-mark:after{content:"";position:absolute;bottom:3px;left:5px;width:5px;border-bottom:2px solid currentColor}h1{font-size:32px;line-height:1.25;letter-spacing:-.04em;margin:25px 0 10px;font-weight:750}h2{font-size:16px;margin:0;font-weight:700}.intro{font-size:14px;margin:0 0 24px;color:#64736d}.card{background:#fff;border:1px solid #dfe6df;border-radius:18px;padding:21px;margin:14px 0;box-shadow:0 3px 12px #1e302c04}.status{display:flex;gap:12px;align-items:flex-start}.indicator{width:11px;height:11px;flex:0 0 11px;margin-top:7px;background:#8c9d94;border-radius:50%}.indicator[data-state="connecting"],.indicator[data-state="scanning"]{background:#b4852d;animation:pulse 1.3s ease-in-out infinite}.indicator[data-state="connected"]{background:#28755a}.indicator[data-state="error"]{background:#b64532}.status-title{font-size:15px;font-weight:700;margin:0}.small{font-size:12px;color:#68766f;margin:5px 0 0;overflow-wrap:anywhere}.status-text{font-size:13px;color:#5d7065;margin:3px 0 0}.offline{border-left:3px solid #c58a35;padding-left:11px;color:#805c2a;font-size:13px;margin:14px 0 0}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:10px}button,input{font:inherit}button{-webkit-tap-highlight-color:transparent;cursor:pointer;touch-action:manipulation}button:focus-visible,input:focus-visible{outline:3px solid #9acbb6;outline-offset:3px}button:disabled{cursor:default;opacity:.55}.scan{border:1px solid #cfded4;background:#f8fbf8;border-radius:10px;padding:9px 12px;font-size:13px;color:#315b48;min-height:44px;white-space:nowrap}.networks{display:grid;gap:7px;max-height:255px;overflow-y:auto;overscroll-behavior:contain;margin:12px 0 0;padding:0;list-style:none}.network{width:100%;text-align:left;border:1px solid #e0e7e1;border-radius:11px;background:#fff;padding:11px 12px;display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:55px;color:#213c2d}.network[aria-pressed="true"]{border-color:#2b6b50;background:#eef6ef}.network-name{font-size:14px;font-weight:600;overflow-wrap:anywhere;word-break:break-word;min-width:0}.network-details{color:#718077;white-space:nowrap;flex-shrink:0;font-size:11px}.field{margin:18px 0 0}label{font-size:13px;font-weight:650;display:block;margin-bottom:7px}input[type="text"],input[type="password"]{display:block;width:100%;min-width:0;height:49px;border:1px solid #cfdad1;background:#fff;border-radius:10px;padding:10px 12px;color:#20392d;font-size:16px}input:disabled{background:#f3f5f1;color:#748078}input[aria-invalid="true"]{border-color:#b64532}.password-toggle{font-weight:400;font-size:12px;color:#536a5d;display:flex;gap:7px;align-items:center;margin:9px 0 0;width:fit-content;min-height:32px}.password-toggle input{width:16px;height:16px;margin:0;accent-color:#2b6b50}.error{font-size:13px;color:#a73826;margin:13px 0 0}.primary{width:100%;min-height:51px;margin-top:20px;border:0;border-radius:11px;background:#275e47;color:#fff;font-size:15px;font-weight:650}.footer{font-size:12px;line-height:1.7;color:#758077;text-align:center;margin:22px 10px 0}.success-note{font-size:13px;color:#275e47;margin:12px 0 0} [hidden]{display:none!important}@keyframes pulse{50%{opacity:.4}}@media(prefers-reduced-motion:reduce){.indicator{animation:none!important}}@media(max-width:350px){main{width:calc(100% - 24px);padding-top:24px}.card{padding:16px}.network-details{font-size:10px}h1{font-size:28px}}
+</style>
+</head>
+<body>
+<main>
+  <div class="brand"><span class="brand-mark" aria-hidden="true"></span>PAPERDIY / WI-FI</div>
+  <h1>让纸屏连接世界</h1>
+  <p class="intro">选择家中或办公室的 2.4 GHz Wi-Fi，完成设备联网。</p>
+  <section class="card" aria-label="连接状态">
+    <div class="status" role="status" aria-live="polite" aria-atomic="true">
+      <span id="indicator" class="indicator" data-state="idle" aria-hidden="true"></span>
+      <div><p id="statusTitle" class="status-title">正在联系设备</p><p id="statusText" class="status-text">请保持手机连接设备的设置热点。</p><p id="connectedSsid" class="small" hidden></p></div>
+    </div>
+    <p id="offline" class="offline" role="status" hidden>与设备的连接暂时中断，正在重试。请保持连接设置热点；若手机提示“无互联网”，请选择继续使用。</p>
+    <p id="remaining" class="small" hidden></p>
+  </section>
+  <form id="setupForm" class="card" method="post" action="/api/connect" novalidate>
+    <div class="section-heading"><h2>附近的网络</h2><button id="scanButton" class="scan" type="button">重新扫描</button></div>
+    <p id="scanHint" class="small" role="status">正在准备网络列表…</p>
+    <ul id="networks" class="networks" aria-label="可用 Wi-Fi 网络"></ul>
+    <div class="field"><label for="ssid">网络名称 (SSID)</label><input id="ssid" name="ssid" type="text" maxlength="32" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="ssidHint" required><p id="ssidHint" class="small">也可以直接输入隐藏网络的名称，大小写需一致。</p></div>
+    <div class="field"><label for="password">Wi-Fi 密码</label><input id="password" name="password" type="password" maxlength="64" autocomplete="new-password" autocapitalize="none" spellcheck="false" aria-describedby="passwordHint"><p id="passwordHint" class="small">开放网络可留空；加密网络需要 8–63 字节密码或 64 位十六进制密钥。</p><label class="password-toggle" for="showPassword"><input id="showPassword" type="checkbox">显示密码</label></div>
+    <p id="formError" class="error" role="alert" hidden></p>
+    <button id="connectButton" class="primary" type="submit" disabled>连接 Wi-Fi</button>
+    <p id="successNote" class="success-note" hidden>联网成功！可以关闭此页面，手机可重新连接日常使用的网络。</p>
+  </form>
+  <p class="footer">设置页面可离线使用，无需手机流量。<br>连接过程中热点可能短暂断开，请等待设备屏幕显示结果。</p>
+  <noscript><p class="error">请在浏览器中启用 JavaScript，然后刷新页面。</p></noscript>
+</main>
+<script>
+(function () {
+  'use strict';
+  var byId = function (id) { return document.getElementById(id); };
+  var ui = {};
+  ['setupForm', 'ssid', 'password', 'showPassword', 'passwordHint', 'scanButton', 'scanHint', 'networks', 'connectButton', 'formError', 'indicator', 'statusTitle', 'statusText', 'connectedSsid', 'offline', 'remaining', 'successNote'].forEach(function (id) { ui[id] = byId(id); });
+  var token = '', sessionPending = false, scanActive = false, scanTimer = null;
+  var state = 'idle', submitting = false, awaitingResult = false, uncertainSubmission = false;
+  var selectedNetwork = null, networkItems = [], statusTimer = null, attempt = 0;
+  var initialScanDone = false;
+  var descriptions = {
+    idle: ['等待连接', '选择网络并输入密码，设备会自动尝试连接。'],
+    provisioning: ['等待连接', '选择网络并输入密码，设备会自动尝试连接。'],
+    scanning: ['正在查找网络', '扫描需要几秒钟，也可以手动输入网络名称。'],
+    connecting: ['正在连接 Wi-Fi', '请稍候。热点可能短暂断开，页面会自动重试。'],
+    connected: ['Wi-Fi 已连接', '设备已成功联网。'],
+    error: ['暂未连接成功', '请检查密码、网络名称和信号强度后重试。']
+  };
+  function byteLength(value) { return new TextEncoder().encode(value).length; }
+  function isOpenNetwork() { return selectedNetwork && selectedNetwork.ssid === ui.ssid.value && !selectedNetwork.secure; }
+  function locked() { return submitting || awaitingResult || state === 'connecting' || state === 'connected'; }
+  function syncControls() {
+    var busy = locked();
+    ui.connectButton.disabled = busy || scanActive || state === 'scanning' || !token;
+    ui.scanButton.disabled = busy || scanActive || state === 'scanning';
+    ui.scanButton.textContent = scanActive || state === 'scanning' ? '正在扫描…' : '重新扫描';
+    ui.ssid.disabled = busy;
+    ui.password.disabled = busy || !!isOpenNetwork();
+    ui.showPassword.disabled = ui.password.disabled;
+    ui.connectButton.textContent = state === 'connected' ? '已连接' : busy ? '正在连接…' : '连接 Wi-Fi';
+    ui.successNote.hidden = state !== 'connected';
+    networkItems.forEach(function (item) {
+      item.button.disabled = busy;
+      item.button.setAttribute('aria-pressed', String(item.network.ssid === ui.ssid.value));
+    });
+  }
+  function showError(message, field) {
+    ui.formError.textContent = message;
+    ui.formError.hidden = false;
+    if (field) { field.setAttribute('aria-invalid', 'true'); field.focus(); }
+  }
+  function clearError() {
+    ui.formError.hidden = true;
+    ui.formError.textContent = '';
+    ui.ssid.removeAttribute('aria-invalid');
+    ui.password.removeAttribute('aria-invalid');
+  }
+  function clearPassword() {
+    ui.password.value = '';
+    ui.showPassword.checked = false;
+    ui.password.type = 'password';
+  }
+  function showState(next, ssid) {
+    if (next === 'provisioning') next = 'idle';
+    state = next;
+    ui.indicator.setAttribute('data-state', next);
+    ui.statusTitle.textContent = descriptions[next][0];
+    ui.statusText.textContent = descriptions[next][1];
+    ui.connectedSsid.hidden = next !== 'connected' || typeof ssid !== 'string' || !ssid;
+    ui.connectedSsid.textContent = ui.connectedSsid.hidden ? '' : '当前网络：' + ssid;
+    syncControls();
+  }
+  async function request(path, options) {
+    var controller = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, 7000) : null;
+    try {
+      return await fetch(path, Object.assign({ cache: 'no-store', credentials: 'same-origin', signal: controller ? controller.signal : undefined }, options || {}));
+    } finally { if (timer !== null) clearTimeout(timer); }
+  }
+  async function loadSession() {
+    if (sessionPending || token) return;
+    sessionPending = true;
+    try {
+      var response = await request('/api/session');
+      if (!response.ok) throw new Error('session');
+      var data = await response.json();
+      if (typeof data.token !== 'string' || !data.token) throw new Error('session');
+      token = data.token;
+      if (!initialScanDone && !locked()) { initialScanDone = true; startScan(); }
+    } catch (_) { /* The status poll retries session setup when the hotspot returns. */ }
+    finally { sessionPending = false; syncControls(); }
+  }
+  function renderNetworks(networks) {
+    while (ui.networks.firstChild) ui.networks.removeChild(ui.networks.firstChild);
+    networkItems = [];
+    var seen = Object.create(null);
+    networks.filter(function (network) {
+      if (!network || typeof network.ssid !== 'string' || !network.ssid || byteLength(network.ssid) > 32) return false;
+      if (seen[network.ssid]) return false;
+      seen[network.ssid] = true;
+      return true;
+    }).sort(function (a, b) { return (Number(b.rssi) || -100) - (Number(a.rssi) || -100); }).forEach(function (network) {
+      var row = document.createElement('li'), button = document.createElement('button');
+      var name = document.createElement('span'), details = document.createElement('span');
+      button.type = 'button'; button.className = 'network';
+      name.className = 'network-name'; name.textContent = network.ssid;
+      details.className = 'network-details';
+      var strength = network.rssi >= -55 ? '强' : network.rssi >= -72 ? '中' : '弱';
+      details.textContent = (network.secure ? '加密' : '开放') + ' · ' + strength;
+      button.appendChild(name); button.appendChild(details); row.appendChild(button); ui.networks.appendChild(row);
+      networkItems.push({ button: button, network: network });
+      button.addEventListener('click', function () {
+        if (locked()) return;
+        if (ui.ssid.value !== network.ssid) clearPassword();
+        selectedNetwork = network;
+        ui.ssid.value = network.ssid;
+        if (!network.secure) clearPassword();
+        ui.passwordHint.textContent = network.secure ? '此网络需要密码：8–63 字节，或 64 位十六进制密钥。' : '这是开放网络，无需输入密码。';
+        clearError(); syncControls();
+        if (network.secure) ui.password.focus();
+      });
+    });
+    syncControls();
+  }
+  function finishScan() {
+    scanActive = false;
+    if (scanTimer !== null) { clearTimeout(scanTimer); scanTimer = null; }
+    syncControls();
+  }
+  async function scanStep() {
+    if (!scanActive || locked()) { finishScan(); return; }
+    try {
+      var response = await request('/api/scan');
+      if (!response.ok) throw new Error('scan');
+      var data = await response.json();
+      if (!Array.isArray(data.networks) || typeof data.busy !== 'boolean') throw new Error('scan');
+      if (data.networks.length || !data.busy) renderNetworks(data.networks);
+      if (data.busy) {
+        ui.scanHint.textContent = '正在查找附近的 2.4 GHz 网络…';
+        scanTimer = setTimeout(scanStep, 1200);
+      } else {
+        ui.scanHint.textContent = networkItems.length ? '点击网络选择，或在下方手动输入。' : '暂未发现网络。请靠近路由器重试，或手动输入名称。';
+        finishScan();
+      }
+    } catch (_) {
+      ui.scanHint.textContent = '扫描暂时不可用，请重新扫描，或手动输入网络名称。';
+      finishScan();
+    }
+  }
+  async function startScan() {
+    if (scanActive || locked() || state === 'scanning') return;
+    if (!token) { loadSession(); return; }
+    scanActive = true; syncControls();
+    ui.scanHint.textContent = '正在查找附近的 2.4 GHz 网络…';
+    try {
+      // Trigger once, then use the read-only cache endpoint until this scan finishes.
+      var response = await request('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: token }) });
+      if (!response.ok && response.status !== 409) {
+        if (response.status === 401 || response.status === 403) { token = ''; loadSession(); }
+        throw new Error('scan');
+      }
+      scanStep();
+    } catch (_) {
+      ui.scanHint.textContent = '扫描暂时不可用，请重新扫描，或手动输入网络名称。';
+      finishScan();
+    }
+  }
+  async function pollStatus() {
+    var version = attempt, pendingAtStart = submitting;
+    try {
+      var response = await request('/api/status');
+      if (!response.ok) throw new Error('status');
+      var data = await response.json();
+      if (!Object.prototype.hasOwnProperty.call(descriptions, data.state)) throw new Error('status');
+      ui.offline.hidden = true;
+      if (typeof data.seconds_remaining === 'number' && isFinite(data.seconds_remaining) && data.seconds_remaining > 0 && data.state !== 'connected') {
+        ui.remaining.textContent = '设置热点剩余时间：约 ' + Math.ceil(data.seconds_remaining / 60) + ' 分钟';
+        ui.remaining.hidden = false;
+      } else { ui.remaining.hidden = true; }
+      if (!pendingAtStart && !submitting && version === attempt) {
+        // An in-flight poll can report idle just before an accepted attempt starts.
+        if (awaitingResult && (data.state === 'idle' || data.state === 'provisioning') && !uncertainSubmission) {
+          showState('connecting');
+        } else {
+          if (data.state === 'connected' || data.state === 'error' || (uncertainSubmission && (data.state === 'idle' || data.state === 'provisioning'))) {
+            awaitingResult = false; uncertainSubmission = false;
+          }
+          if (data.state === 'connecting') awaitingResult = true;
+          if (data.state === 'connected') { clearPassword(); clearError(); finishScan(); }
+          // Server messages are deliberately not echoed: they may contain credentials.
+          showState(data.state, data.ssid);
+        }
+      }
+      if (!token) loadSession();
+    } catch (_) { ui.offline.hidden = false; }
+    finally { if (state !== 'connected') statusTimer = setTimeout(pollStatus, 1500); }
+  }
+  async function submit(event) {
+    event.preventDefault();
+    if (locked() || scanActive || state === 'scanning') return;
+    clearError();
+    var ssid = ui.ssid.value, password = isOpenNetwork() ? '' : ui.password.value;
+    var ssidBytes = byteLength(ssid), passwordBytes = byteLength(password);
+    if (ssidBytes < 1 || ssidBytes > 32) { showError('网络名称需要 1–32 个 UTF-8 字节（中文通常占 3 字节）。', ui.ssid); return; }
+    if ((!password && selectedNetwork && selectedNetwork.ssid === ssid && selectedNetwork.secure) || (password && !((passwordBytes >= 8 && passwordBytes <= 63) || /^[0-9a-fA-F]{64}$/.test(password)))) {
+      showError('请输入 8–63 字节密码，或恰好 64 位的十六进制密钥。', ui.password); return;
+    }
+    if (!token) { showError('正在重新联系设备，请稍后重试。'); loadSession(); return; }
+    submitting = true; attempt += 1; syncControls();
+    try {
+      var response = await request('/api/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ssid: ssid, password: password, token: token }) });
+      if (response.status === 202) {
+        clearPassword(); awaitingResult = true; uncertainSubmission = false;
+        showState('connecting');
+      } else if (response.status === 401 || response.status === 403) {
+        token = ''; showError('设置会话已更新，请稍候再点击连接。'); loadSession();
+      } else if (response.status === 409) {
+        showError('设备正在处理其他操作，请稍后重试。');
+      } else {
+        showError('设备未接受连接请求，请检查网络名称与密码后重试。');
+      }
+    } catch (_) {
+      // Never retry a POST automatically: the device may already have accepted it.
+      awaitingResult = true; uncertainSubmission = true;
+      showState('connecting'); ui.offline.hidden = false;
+    } finally { password = ''; submitting = false; syncControls(); }
+  }
+  ui.scanButton.addEventListener('click', startScan);
+  ui.setupForm.addEventListener('submit', submit);
+  ui.showPassword.addEventListener('change', function () { ui.password.type = ui.showPassword.checked ? 'text' : 'password'; });
+  ui.ssid.addEventListener('input', function () {
+    selectedNetwork = null;
+    ui.passwordHint.textContent = '开放网络可留空；加密网络需要 8–63 字节密码或 64 位十六进制密钥。';
+    clearError(); syncControls();
+  });
+  ui.password.addEventListener('input', clearError);
+  loadSession(); pollStatus();
+}());
+</script>
+</body>
+</html>

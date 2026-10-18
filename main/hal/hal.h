@@ -56,6 +56,9 @@ public:
     bool isButtonInteractionActive();
     bool wasButtonAClicked();
     bool wasButtonBClicked();
+    // Consume the one-shot event from holding A alone for three seconds.
+    bool wasButtonALongPressed();
+    // Clear queued actions and ignore the current press until all buttons are released.
     void suppressButtonActionsUntilRelease();
 
     /* --------------------------------- TF Card -------------------------------- */

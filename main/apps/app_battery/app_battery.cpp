@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <hal.h>
+#include <app_wifi_scan/app_wifi_scan.h>
 
 namespace {
 
@@ -43,6 +44,7 @@ void AppBattery::onOpen()
 
 void AppBattery::onRunning()
 {
+    if (AppWifiScan::isModal()) return;
     if (_pending_draw) {
         drawPendingVoltage();
         return;

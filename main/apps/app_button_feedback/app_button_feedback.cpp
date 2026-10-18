@@ -8,6 +8,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <hal.h>
+#include <app_wifi_scan/app_wifi_scan.h>
 
 namespace {
 
@@ -76,7 +77,7 @@ void ButtonFeedback::feedbackTask(void* argument)
     auto* feedback = static_cast<ButtonFeedback*>(argument);
     while (true) {
         auto& hal = GetHAL();
-        if (hal.isShutdownInProgress()) {
+        if (hal.isShutdownInProgress() || AppWifiScan::isModal()) {
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
@@ -84,7 +85,7 @@ void ButtonFeedback::feedbackTask(void* argument)
         bool changed = false;
         {
             DisplayGuard guard(hal);
-            if (!hal.isShutdownInProgress()) {
+            if (!hal.isShutdownInProgress() && !AppWifiScan::isModal()) {
                 changed = feedback->update();
                 if (changed) {
                     feedback->refreshUpdate();
