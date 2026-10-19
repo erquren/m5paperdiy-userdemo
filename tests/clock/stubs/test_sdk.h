@@ -31,6 +31,8 @@ esp_err_t esp_event_handler_instance_register(esp_event_base_t, std::int32_t, es
 esp_err_t esp_event_handler_instance_unregister(esp_event_base_t, std::int32_t, esp_event_handler_instance_t);
 
 struct esp_netif_t {};
+struct wifi_ap_record_t {};
+esp_err_t esp_wifi_sta_get_ap_info(wifi_ap_record_t*);
 struct esp_ip4_addr_t { std::uint32_t addr = 0; };
 struct esp_netif_ip_info_t { esp_ip4_addr_t ip, netmask, gw; };
 struct ip_event_got_ip_t { esp_netif_t* esp_netif; esp_netif_ip_info_t ip_info; bool ip_changed; };

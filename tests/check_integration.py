@@ -15,9 +15,9 @@ assert 'MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT' in ui
 assert 'd.readRect(0, 0, _saved_width, _saved_height, _saved_pixels)' in ui
 assert 'hal.display.pushImage(0, 0, _saved_width, _saved_height, _saved_pixels)' in ui
 assert 'hal.wasButtonALongPressed()' in ui
-assert 'wifi.tick()' in ui
+assert 'ClockRadio::instance().tick()' in ui
 assert 'AppShutdown::isDialogOpen() || hal.isShutdownInProgress()' in ui
-assert ui.index('wifi.tick()') < ui.index('AppShutdown::isDialogOpen()')
+assert ui.index('ClockRadio::instance().tick()') < ui.index('AppShutdown::isDialogOpen()')
 assert 'wifi.stopProvisioning()' in ui
 assert 'http://192.168.4.1' in ui
 assert 'hal.isButtonPressed(ButtonId::A) && hal.isButtonPressed(ButtonId::B)' in ui
@@ -36,7 +36,11 @@ assert clock.index("_active.store(true") < clock.index("display.setRotation(1)")
 assert "MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT" in clock
 assert "hal.wasButtonBTripleClicked()" in clock
 assert "hal.wasButtonAClicked();" in clock and "hal.wasButtonBClicked();" in clock
-assert ui.index("TimeService::instance().tick()") < ui.index("if (AppClock::isActive())")
+assert ui.index("ClockRadio::instance().tick()") < ui.index("if (AppClock::isActive())")
 assert "AppClock::leaveForSystemAction();" in ui
 assert "./clock/clock_fonts.cpp" in cmake
 print("PASS: clock ordering, landscape ownership, short-click isolation, time lifecycle")
+
+assert "ClockRadio::instance().setActive(true)" in clock
+assert "ClockRadio::instance().setActive(false)" in clock
+assert "./clock/clock_radio.cpp" in cmake

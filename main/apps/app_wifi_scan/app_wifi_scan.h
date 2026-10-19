@@ -18,6 +18,7 @@ private:
     void drawOverview(const WifiManager::Snapshot& snapshot);
     inline static std::atomic<bool> _modal{false};
     std::string _local_error;
+    std::string _rendered_ap_ssid;
     std::uint16_t* _saved_pixels = nullptr;
     int _saved_width = 0;
     int _saved_height = 0;

@@ -12,4 +12,7 @@ ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}" "$tmp/service" startup
 ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}" "$tmp/service" init-failure
 ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}" "$tmp/service" dns-lifecycle
 ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}" "$tmp/service" dns-failure
-echo 'PASS: 6 executable clock scenarios (repeated stress-loop iterations are not counted as extra scenarios)'
+ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}" "$tmp/service" network-gate
+ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}" "$tmp/service" network-gate-dns
+ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}" "$tmp/service" network-window
+echo 'PASS: 9 executable clock scenarios (repeated stress-loop iterations are not counted as extra scenarios)'

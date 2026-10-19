@@ -26,6 +26,13 @@ public:
         std::vector<Network> networks;
         bool scan_busy = false;
         bool provisioning = false;
+        // Actual driver/validated-link state, never inferred from GOT_IP alone.
+        bool radio_on = false;
+        // Driver stopped, STOP observed, and asynchronous teardown drained.
+        bool radio_idle = false;
+        bool station_connected = false;
+        bool clock_mode = false;
+        bool has_saved_credentials = false;
     };
 
     static WifiManager& instance();
@@ -36,6 +43,11 @@ public:
     bool provisioning() const;
     Snapshot snapshot() const;
     void requestScan();
+
+    // Main-task-only policy controls. Clock mode revokes provisioning/scans
+    // and stops the driver except during an explicitly enabled sync window.
+    void setClockMode(bool active);
+    void setClockSyncEnabled(bool enabled);
 
     WifiManager(const WifiManager&) = delete;
     WifiManager& operator=(const WifiManager&) = delete;

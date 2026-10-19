@@ -1,5 +1,6 @@
 set(APP_SRCS
     "./clock/time_service.cpp"
+    "./clock/clock_radio.cpp"
     "./clock/clock_fonts.cpp"
     "./network/wifi_manager.cpp"
     "./network/captive_dns.cpp"

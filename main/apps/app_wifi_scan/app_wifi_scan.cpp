@@ -3,6 +3,7 @@
 #include <app_shutdown/app_shutdown.h>
 #include <app_clock/app_clock.h>
 #include <clock/time_service.h>
+#include <clock/clock_radio.h>
 #include <LGFX_Fonts.hpp>
 #include <cstdio>
 #include <esp_heap_caps.h>
@@ -34,16 +35,18 @@ void AppWifiScan::onRunning()
 {
     auto& hal = GetHAL();
     auto& wifi = WifiManager::instance();
-    wifi.tick();
-    TimeService::instance().tick();
-    // Keep networking alive, but never paint over the shutdown overlay.
+    ClockRadio::instance().tick();
+    // Advance the radio/time policy, but never paint over the shutdown overlay.
     if (AppShutdown::isDialogOpen() || hal.isShutdownInProgress()) return;
     const bool long_a = hal.wasButtonALongPressed();
     if (AppClock::isActive()) {
-        // AP expiry/success still advances above. Defer its framebuffer restore
-        // until clock exit so a hidden setup cannot paint over the clock.
+        // Entering the clock closes the AP. Defer its framebuffer restore
+        // until clock exit so the prior setup cannot paint over the clock.
         if (!long_a) return;
         AppClock::leaveForSystemAction();
+        // The clock closed its prior hotspot. Reconcile that hidden modal so
+        // this same long press can open a fresh, intentional provisioning AP.
+        if (isModal() && !wifi.provisioning()) leaveSetup();
     }
     if (isModal()) {
         // Restore the normal screen before the existing A+B shutdown dialog opens.
@@ -62,7 +65,7 @@ void AppWifiScan::onRunning()
     if (isModal()) {
         const auto minutes = (snapshot.seconds_remaining + 59) / 60;
         if (snapshot.revision != _revision || minutes != _last_minute) {
-            drawSetup(snapshot, false);
+            drawSetup(snapshot, snapshot.ap_ssid != _rendered_ap_ssid);
             _last_minute = minutes;
         }
     } else if (snapshot.revision != _revision) {
@@ -118,7 +121,16 @@ void AppWifiScan::drawSetup(const WifiManager::Snapshot& s, bool full)
     auto& d = hal.display;
     d.setTextColor(TFT_BLACK, TFT_WHITE); d.setTextDatum(middle_center); d.setTextSize(1);
     if (full) {
+        _rendered_ap_ssid = s.ap_ssid;
         d.fillScreen(TFT_WHITE);
+        if (s.ap_ssid.empty()) {
+            d.setFont(&fonts::lvFontMontserrat28);
+            d.drawString("Starting Wi-Fi setup...",270,450);
+            d.setFont(&fonts::lvFontMontserrat18);
+            d.drawString("Please wait. B: cancel",270,510);
+            hal.requestFullRedraw(m5gfx::epd_mode_t::epd_quality);
+            return;
+        }
         d.setFont(&fonts::lvFontMontserrat28); d.drawString("WI-FI SETUP", 270, 42);
         d.setFont(&fonts::lvFontMontserrat18); d.drawString("1. Scan to join the device hotspot",270,88);
         std::string qr = "WIFI:T:WPA;S:" + s.ap_ssid + ";P:" + s.ap_password + ";;";

@@ -3,6 +3,7 @@
 
 #include <app_shutdown/app_shutdown.h>
 #include <clock/time_service.h>
+#include <clock/clock_radio.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <hal.h>
@@ -82,6 +83,7 @@ bool AppClock::enter()
         leave();
         return false;
     }
+    ClockRadio::instance().setActive(true);
     hal.suppressButtonActionsUntilRelease();
     _has_rendered = false;
     render(true);
@@ -89,6 +91,7 @@ bool AppClock::enter()
 }
 void AppClock::leave()
 {
+    ClockRadio::instance().setActive(false);
     auto& hal = GetHAL();
     {
         DisplayGuard guard(hal);

@@ -29,9 +29,19 @@ LeakSanitizer is disabled by default because its process inspection is unsupport
   lookup and its subsequent SNTP request share the same 30-second deadline.
 - The `dns-failure` scenario checks immediate resolver errors and bounded
   retry/cooldown behavior without leaking a callback context.
+- The `network-gate` scenario checks synchronous disable before startup and
+  during SNTP, callbacks during teardown, late GOT_IP, retained offline time,
+  success-only monotonic metadata, idempotence, and live association/netif/IP
+  checks when reenabled. A disconnect during interface observation wins.
+- The `network-gate-dns` scenario checks deferred DNS and queued results across
+  disabled/reopened windows, pool exhaustion, and reuse after terminal callbacks.
+- The `network-window` scenario checks exact absolute window deadlines before
+  the next tick, late DNS and delayed TCP/IP dispatch, shortening/clearing an
+  active deadline without restarting attempts, and preserving timely replies.
 
-The runner reports six executable scenarios: policy, normal service, startup,
-initialization failure, deferred DNS lifecycle, and immediate DNS failure.
+The runner reports nine executable scenarios: policy, normal service, startup,
+initialization failure, deferred DNS lifecycle, immediate DNS failure, synchronous
+network gating, deferred DNS across network-gate cycles, and absolute windows.
 The 1,000 repeated concurrency iterations do not inflate that scenario count.
 
 The tests mock packet transport and event scheduling. They do not prove live DNS,
@@ -63,3 +73,15 @@ No date is fabricated from build time, IP acquisition, or saved NVS. After a ful
 power cycle or deep-sleep reset it remains invalid until another successful
 synchronization. A clock that has synchronized keeps ticking while powered and
 offline; this service does not preserve its monotonic anchor across a reset.
+
+`setNetworkEnabled(false)` is a synchronous, main-task-only fence for deliberate
+radio-off windows. It stops owned SNTP and suppresses new DNS/SNTP work and late
+GOT_IP until reenabled, while preserving accepted time and success metadata.
+An accepted response awaiting the next tick is retained when the gate closes.
+Reenabling may observe the already-connected station; pass `false` as the second
+argument to wait for a later valid GOT_IP instead. Interface observation checks
+actual STA association, netif-up state, and a nonzero current IP. The service
+only reads driver status and never starts, stops, or creates Wi-Fi.
+An optional third argument sets the window's absolute monotonic deadline. It
+clamps callback eligibility and TCP/IP work even if the main task runs late.
+An expired gate closes on the next tick; a new window needs an explicit enable.

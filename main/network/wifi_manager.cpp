@@ -130,6 +130,19 @@ struct WifiManager::Impl {
     bool init_failed = false;
     bool radio_initialized = false;
     bool radio_started = false;
+    bool clock_mode = false;
+    bool clock_sync_enabled = false;
+    bool pending_provisioning = false;
+    // Do not restart until the old driver's STOP event has crossed the default
+    // event loop. Events stamped after stop were requested cannot become a new
+    // connection/scan attempt simply because generation was incremented.
+    bool radio_stop_pending = false;
+    bool radio_stop_seen = false;
+    std::uint32_t radio_stop_generation = 0;
+    std::int64_t radio_stop_retry_at = 0;
+    std::atomic<bool> accept_radio_events{false};
+    std::atomic<std::uint32_t> stopped_generation{0};
+    std::int64_t radio_start_retry_at = 0;
     bool linked = false;
     bool associated = false;
     bool candidate = false;
@@ -168,12 +181,20 @@ struct WifiManager::Impl {
     void publish()
     {
         Lock lock(mutex);
+        state.radio_on = radio_started;
+        state.radio_idle = ready && !radio_started && !radio_stop_pending && !ap_teardown && !pending_provisioning;
+        state.station_connected = linked && radio_started && !radio_stop_pending;
+        state.clock_mode = clock_mode;
+        state.has_saved_credentials = stored.valid();
         const bool same_networks = state.networks.size() == published.networks.size() &&
             std::equal(state.networks.begin(), state.networks.end(), published.networks.begin(),
                 [](const Network& a, const Network& b) { return a.ssid == b.ssid && a.rssi == b.rssi && a.secure == b.secure; });
         if (state.state == published.state && state.message == published.message && state.ssid == published.ssid &&
             state.ap_ssid == published.ap_ssid && state.ap_password == published.ap_password &&
-            state.scan_busy == published.scan_busy && state.provisioning == published.provisioning && same_networks) return;
+            state.scan_busy == published.scan_busy && state.provisioning == published.provisioning &&
+            state.radio_on == published.radio_on && state.radio_idle == published.radio_idle &&
+            state.station_connected == published.station_connected &&
+            state.clock_mode == published.clock_mode && state.has_saved_credentials == published.has_saved_credentials && same_networks) return;
         state.revision = published.revision + 1;
         published = state;
     }
@@ -243,6 +264,7 @@ struct WifiManager::Impl {
     }
     void beginAttempt()
     {
+        if (!radio_started || radio_stop_pending || (clock_mode && !clock_sync_enabled)) return;
         state.ssid = target.ssid;
         if (!target.valid()) { connect_queued = false; return; }
         wifi_config_t config = {};
@@ -278,7 +300,7 @@ struct WifiManager::Impl {
             status("error", message);
             return;
         }
-        if (stored.valid()) {
+        if (stored.valid() && (!clock_mode || clock_sync_enabled)) {
             target = stored;
             retry_at = nowMs() + wifi_policy::retryDelay(attempts, backoff_bursts, esp_random());
             if (attempts >= 3) backoff_bursts = std::min(backoff_bursts + 1, 4u);
@@ -327,7 +349,14 @@ struct WifiManager::Impl {
         auto* self = static_cast<Impl*>(context);
         Event event = {};
         event.generation = self->generation.load();
-        if (base == WIFI_EVENT && id == WIFI_EVENT_AP_START) event.type = EventType::ApStarted;
+        if (base == WIFI_EVENT && id == WIFI_EVENT_STA_STOP) {
+            // A dedicated inbox cannot lose the restart boundary if the normal
+            // event queue was full when suspension began.
+            self->stopped_generation.store(event.generation);
+            return;
+        }
+        if (!self->accept_radio_events.load()) return;
+        else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_START) event.type = EventType::ApStarted;
         else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STOP) event.type = EventType::ApStopped;
         else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) event.type = EventType::GotIp;
         else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED && data) {
@@ -356,8 +385,9 @@ struct WifiManager::Impl {
     }
     void handleEvent(const Event& event)
     {
-        if (event.type == EventType::ApStarted) { ap_start_seen = true; return; }
-        if (event.type == EventType::ApStopped) { ap_start_seen = false; return; }
+        if (!radio_started || radio_stop_pending || !accept_radio_events.load()) return;
+        if (event.type == EventType::ApStarted) { if (ap_starting) ap_start_seen = true; return; }
+        if (event.type == EventType::ApStopped) { if (!ap_starting) ap_start_seen = false; return; }
         if (event.type == EventType::ScanDone) {
             if (scan_cancel_pending) {
                 scan_cancel_pending = false;
@@ -436,6 +466,7 @@ struct WifiManager::Impl {
     }
     void launchScan()
     {
+        if (clock_mode || !radio_started || radio_stop_pending) { scan_pending = false; return; }
         if (state.scan_busy || scan_cancel_pending || attempt_active || connect_queued || wait_disconnect) return;
         scan_pending = false;
         wifi_scan_config_t config = {};
@@ -615,7 +646,7 @@ struct WifiManager::Impl {
     }
     void startServicesWhenReady()
     {
-        if (!ap_starting || !state.provisioning) return;
+        if (clock_mode || !radio_started || radio_stop_pending || !ap_starting || !state.provisioning) return;
         if (ap_start_seen && esp_netif_is_netif_up(ap)) {
             ap_starting = false;
             const esp_err_t dhcp = esp_netif_dhcps_start(ap);
@@ -633,6 +664,11 @@ struct WifiManager::Impl {
     }
     void closePortal()
     {
+        if (pending_provisioning) {
+            pending_provisioning = false;
+            state.provisioning = false;
+            publish();
+        }
         if (ap_teardown) return;
         if (!state.provisioning && !http && !ap_teardown) return;
         const bool cancel = attempt_active || connect_queued || candidate;
@@ -683,7 +719,65 @@ struct WifiManager::Impl {
         http = nullptr;
         ap_teardown = false;
         stop_submitted = false;
-        if (!linked && stored.valid()) scheduleConnect(stored, false);
+        if (!linked && stored.valid() && !clock_mode && radio_started && !radio_stop_pending && !pending_provisioning)
+            scheduleConnect(stored, false);
+        else publish();
+    }
+    bool wantsRadio() const { return !clock_mode || clock_sync_enabled; }
+    void stopRadio()
+    {
+        if (!radio_initialized || (!radio_started && !radio_stop_pending)) return;
+        if (!radio_stop_pending) {
+            accept_radio_events.store(false);
+            clearScan();
+            cancelConnection();
+            scan_cancel_pending = false;
+            scan_cancel_deadline = 0;
+            state.networks.clear();
+            candidate = false;
+            wipe(&target, sizeof(target));
+            wait_disconnect = false;
+            radio_stop_pending = radio_started;
+            radio_stop_seen = false;
+            radio_stop_generation = generation.load();
+            radio_stop_retry_at = 0;
+        }
+        if (!radio_started || nowMs() < radio_stop_retry_at) return;
+        const esp_err_t result = esp_wifi_stop();
+        if (result != ESP_OK && result != ESP_ERR_WIFI_NOT_STARTED) {
+            radio_stop_retry_at = nowMs() + 1000;
+            status("error", "Unable to power down Wi-Fi. Retrying.");
+            return;
+        }
+        radio_started = false;
+        // NOT_STARTED means there is no live driver and no STOP event to await.
+        if (result == ESP_ERR_WIFI_NOT_STARTED) radio_stop_seen = true;
+        ap_disabled = true;
+        ap_start_seen = false;
+        status("radio_off", "Clock mode: Wi-Fi powered off");
+    }
+    void advanceRadio()
+    {
+        if (!wantsRadio() || (radio_stop_pending && radio_started)) stopRadio();
+        if (radio_stop_pending) {
+            radio_stop_seen = radio_stop_seen || stopped_generation.load() == radio_stop_generation;
+            if (radio_started || !radio_stop_seen) return;
+            radio_stop_pending = false;
+            radio_stop_seen = false;
+            publish();
+        }
+        if (!wantsRadio() || radio_started || ap_teardown || nowMs() < radio_start_retry_at) return;
+        if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK || esp_wifi_start() != ESP_OK) {
+            radio_start_retry_at = nowMs() + 5000;
+            status("error", "Unable to restart Wi-Fi");
+            return;
+        }
+        radio_started = true;
+        radio_start_retry_at = 0;
+        accept_radio_events.store(true);
+        if (!pending_provisioning && stored.valid()) scheduleConnect(stored, false);
+        else if (!pending_provisioning) status("idle", "Hold button A to set up Wi-Fi");
+        else publish();
     }
 };
 
@@ -735,6 +829,7 @@ bool WifiManager::begin()
         return fail("Wi-Fi event registration failed");
     if (esp_wifi_start() != ESP_OK) return fail("Wi-Fi station startup failed");
     s.radio_started = true;
+    s.accept_radio_events.store(true);
     s.ready = true;
     if (s.loadCredentials()) s.scheduleConnect(s.stored, false);
     else s.status("idle", "Hold button A to set up Wi-Fi");
@@ -745,7 +840,16 @@ bool WifiManager::startProvisioning()
 {
     if (!begin()) return false;
     auto& s = *_impl;
-    if (s.ap_teardown) { s.status("error", "Previous setup is closing. Please retry."); return false; }
+    if (s.clock_mode) return false;
+    if (s.pending_provisioning) return true;
+    if (s.ap_teardown || s.radio_stop_pending || !s.radio_started) {
+        // Preserve the UI modal immediately, then start the real portal once
+        // the old STOP boundary and asynchronous HTTP shutdown have completed.
+        s.pending_provisioning = true;
+        s.state.provisioning = true;
+        s.status("provisioning", "Starting setup hotspot...");
+        return true;
+    }
     if (s.state.provisioning) return true;
     s.clearScan();
     s.cancelConnection();
@@ -814,15 +918,41 @@ WifiManager::Snapshot WifiManager::snapshot() const { return _impl->read(); }
 void WifiManager::requestScan()
 {
     if (!_impl->commands) return;
+    { Lock lock(_impl->mutex); if (_impl->published.clock_mode) return; }
     Impl::Command command;
     xQueueSend(_impl->commands, &command, 0);
+}
+
+void WifiManager::setClockMode(bool active)
+{
+    auto& s = *_impl;
+    if (s.clock_mode == active) return;
+    s.clock_mode = active;
+    s.clock_sync_enabled = false;
+    if (active) {
+        s.closePortal();
+        s.stopRadio();
+    }
+    // Resume only in tick(), after draining the old event inbox. A long-A
+    // setup request can queue meanwhile without reviving a prior AP event.
+    s.publish();
+}
+
+void WifiManager::setClockSyncEnabled(bool enabled)
+{
+    auto& s = *_impl;
+    if (!s.clock_mode || s.clock_sync_enabled == enabled) return;
+    s.clock_sync_enabled = enabled;
+    if (!enabled) s.stopRadio();
+    // Starting is deferred to tick(), after STOP events/portal teardown.
+    s.publish();
 }
 
 void WifiManager::tick()
 {
     auto& s = *_impl;
     if (!s.ready) return;
-    if (s.event_overflow.exchange(false)) {
+    if (s.event_overflow.exchange(false) && s.radio_started && !s.radio_stop_pending) {
         s.clearScan();
         s.cancelConnection();
         s.failed("Wi-Fi events interrupted. Please retry.");
@@ -831,10 +961,10 @@ void WifiManager::tick()
     for (unsigned i = 0; i < 32 && xQueueReceive(s.events, &event, 0) == pdTRUE; ++i) s.handleEvent(event);
     Impl::Command command;
     for (unsigned i = 0; i < 8 && xQueueReceive(s.commands, &command, 0) == pdTRUE; ++i) {
-        bool current = !command.from_web;
+        bool current = !s.clock_mode && !command.from_web;
         if (command.from_web) {
             Lock lock(s.mutex);
-            current = s.published.provisioning && !wifi_policy::expired(true, nowMs(), s.session_deadline, s.success_deadline) &&
+            current = !s.clock_mode && s.published.provisioning && !wifi_policy::expired(true, nowMs(), s.session_deadline, s.success_deadline) &&
                 wifi_validation::equalToken(command.token, s.csrf);
         }
         if (current) {
@@ -850,6 +980,13 @@ void WifiManager::tick()
         wipe(&command, sizeof(command));
     }
     s.completeTeardown();
+    s.advanceRadio();
+    if (s.pending_provisioning && !s.clock_mode && s.radio_started && !s.radio_stop_pending && !s.ap_teardown) {
+        s.pending_provisioning = false;
+        s.state.provisioning = false;
+        startProvisioning();
+    }
+    if (s.pending_provisioning || !s.radio_started || s.radio_stop_pending || (s.clock_mode && !s.clock_sync_enabled)) return;
     s.startServicesWhenReady();
     const auto now = nowMs();
     if (s.state.provisioning) {
@@ -885,5 +1022,5 @@ void WifiManager::tick()
         s.connect_queued = true;
         s.connect_at = now + 200;
     }
-    if (s.scan_pending) s.launchScan();
+    if (s.scan_pending && !s.clock_mode) s.launchScan();
 }

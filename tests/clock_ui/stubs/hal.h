@@ -12,7 +12,7 @@ namespace m5gfx { enum class epd_mode_t {epd_quality, epd_text, epd_fastest}; }
 class M5GFX {
 public:
     std::vector<std::uint16_t> pixels = std::vector<std::uint16_t>(540 * 960, TFT_WHITE);
-    int rotation = 0, draws = 0, lock_depth = 0;
+    int rotation = 0, draws = 0, lock_depth = 0, qr_count = 0;
     int width() const { return rotation & 1 ? 960 : 540; }
     int height() const { return rotation & 1 ? 540 : 960; }
     int getRotation() const { return rotation; }
@@ -26,7 +26,7 @@ public:
     void setFont(const int*) {}
     int textWidth(const char* value) const { return std::strlen(value) * 8; }
     void drawString(const char*, int x, int y) { fillRect(x, y, 1, 1, TFT_BLACK); }
-    void qrcode(const char*, int x, int y, int size, int, bool) { fillRect(x,y,size,size,TFT_BLACK); }
+    void qrcode(const char*, int x, int y, int size, int, bool) { ++qr_count; fillRect(x,y,size,size,TFT_BLACK); }
     void readRect(int x, int y, int w, int h, std::uint16_t* target)
     {
         assert(lock_depth == 1 && x == 0 && y == 0 && w == width() && h == height());

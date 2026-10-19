@@ -14,7 +14,9 @@ namespace {
 std::atomic<std::int64_t> now{0};
 esp_netif_t station;
 bool station_up = false;
+bool station_associated = false;
 std::uint32_t station_ip = 0;
+bool disconnect_during_ip_read = false;
 struct Handler { esp_event_base_t base; esp_event_handler_t callback; void* context; bool active; };
 std::vector<Handler> handlers;
 unsigned registration_calls = 0;
@@ -24,6 +26,8 @@ unsigned starts = 0;
 unsigned stops = 0;
 unsigned lookups = 0;
 bool tcpip_context = false;
+unsigned tcpip_calls_before_advance = 0;
+std::int64_t advance_tcpip_to_us = 0;
 enum class DnsMode { Immediate, Deferred, Failure };
 DnsMode dns_mode = DnsMode::Immediate;
 struct PendingDns { std::string hostname; dns_found_callback callback; void* context; };
@@ -42,16 +46,22 @@ void emit(esp_event_base_t base, int id, void* data = nullptr)
     for (const auto& handler : handlers)
         if (handler.active && handler.base == base) handler.callback(handler.context, base, id, data);
 }
+void notifyGotIp()
+{
+    ip_event_got_ip_t ip{&station, {{station_ip}, {}, {}}, true};
+    emit(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip);
+}
 void gotIp()
 {
     station_up = true;
+    station_associated = true;
     station_ip = 0x01020304;
-    ip_event_got_ip_t ip{&station, {{station_ip}, {}, {}}, true};
-    emit(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip);
+    notifyGotIp();
 }
 void disconnect()
 {
     station_up = false;
+    station_associated = false;
     // Deliberately retain stale IP, as a disconnected interface can do.
     emit(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED);
 }
@@ -109,14 +119,20 @@ esp_netif_t* esp_netif_get_handle_from_ifkey(const char* key)
     return &station;
 }
 bool esp_netif_is_netif_up(esp_netif_t* netif) { assert(netif == &station); return station_up; }
+esp_err_t esp_wifi_sta_get_ap_info(wifi_ap_record_t*) { return station_associated ? ESP_OK : ESP_FAIL; }
 esp_err_t esp_netif_get_ip_info(esp_netif_t* netif, esp_netif_ip_info_t* value)
 {
     assert(netif == &station);
     value->ip.addr = station_ip;
+    if (disconnect_during_ip_read) {
+        disconnect_during_ip_read = false;
+        disconnect();
+    }
     return ESP_OK;
 }
 esp_err_t esp_netif_tcpip_exec(esp_netif_callback_fn function, void* context)
 {
+    if (tcpip_calls_before_advance && --tcpip_calls_before_advance == 0) now = advance_tcpip_to_us;
     const bool before = tcpip_context;
     tcpip_context = true;
     const auto result = function(context);
@@ -180,9 +196,11 @@ int main(int argc, char** argv)
     using namespace clock_policy;
     auto& service = TimeService::instance();
     assert(!service.snapshot().valid && service.snapshot().epoch_seconds == 0);
+    assert(service.nextMinuteDeadlineUs() == now.load() + 60 * SECOND_US);
     service.tick();
     if (argc > 1 && std::strcmp(argv[1], "startup") == 0) {
         station_up = true;
+        station_associated = true;
         station_ip = 0x01020304;
         assert(service.begin());
         assert(starts == 1 && service.snapshot().syncing && !service.snapshot().valid);
@@ -198,6 +216,7 @@ int main(int argc, char** argv)
         assert(!service.begin());
         assert(handlers.size() == 1 && !handlers[0].active);
         station_up = true;  // IP acquired while the failed observer was absent
+        station_associated = true;
         station_ip = 0x01020304;
         next_init_result = ESP_ERR_INVALID_STATE;
         assert(service.begin());
@@ -209,6 +228,265 @@ int main(int argc, char** argv)
         service.tick();
         assert(service.snapshot().valid && stops == 1);
         puts("PASS: event-registration cleanup, SNTP init failure/backoff, no deinit of unowned SNTP");
+        return 0;
+    }
+    if (argc > 1 && std::strcmp(argv[1], "network-gate") == 0) {
+        // A pre-begin gate must prevent startup observation and late GOT_IP.
+        station_up = station_associated = true;
+        station_ip = 0x01020304;
+        service.setNetworkEnabled(false);
+        assert(service.begin());
+        notifyGotIp();
+        service.tick();
+        assert(starts == 0 && lookups == 0 && !service.snapshot().network_available);
+        assert(service.snapshot().sync_generation == 0 && service.snapshot().last_successful_sync_us == 0);
+        service.setNetworkEnabled(false);
+        now = 10 * SECOND_US;
+        service.setNetworkEnabled(true, false);
+        service.tick();
+        assert(starts == 0);  // suppress observation until a valid new event
+        notifyGotIp();
+        service.tick();
+        assert(starts == 1 && service.snapshot().syncing);
+        assert(service.snapshot().sync_generation == 0);  // GOT_IP is not success
+        now += 2 * SECOND_US;
+        reply(BASE_EPOCH, 123000);
+        reply_during_stop = true;
+        service.setNetworkEnabled(false);  // retain a reply accepted before the fence
+        auto accepted = service.snapshot();
+        assert(stops == 1 && !initialized && accepted.valid && !accepted.syncing && !accepted.network_available);
+        assert(accepted.epoch_seconds == BASE_EPOCH && accepted.sync_generation == 1);
+        assert(accepted.last_successful_sync_us == now.load());
+        now += SECOND_US;
+        lateReply();  // no tick is needed to fence callbacks after disabling
+        notifyGotIp();
+        service.tick();
+        assert(starts == 1 && lookups == 1 && !service.snapshot().network_available);
+        assert(service.snapshot().epoch_seconds == BASE_EPOCH + 1);
+        assert(service.snapshot().sync_generation == accepted.sync_generation);
+        assert(service.snapshot().last_successful_sync_us == accepted.last_successful_sync_us);
+
+        service.setNetworkEnabled(true, false);
+        assert(starts == 1);
+        notifyGotIp();
+        service.tick();
+        assert(starts == 2);
+        service.setNetworkEnabled(false);  // active SNTP is stopped synchronously
+        assert(stops == 2 && !initialized && !service.snapshot().syncing);
+        service.setNetworkEnabled(false);
+        assert(stops == 2 && service.snapshot().sync_generation == 1);
+        lateReply();
+        service.tick();
+        assert(service.snapshot().sync_generation == 1);
+
+        // A stopped driver can leave both cached IP and netif-up state behind.
+        station_associated = false;
+        assert(station_up && station_ip);
+        service.setNetworkEnabled(true);
+        notifyGotIp();
+        service.tick();
+        assert(starts == 2 && !service.snapshot().network_available);
+        service.setNetworkEnabled(false);
+        station_associated = true;
+        station_up = false;
+        service.setNetworkEnabled(true);
+        notifyGotIp();
+        service.tick();
+        assert(starts == 2);  // association without an up interface is insufficient
+        service.setNetworkEnabled(false);
+        station_up = true;
+        station_ip = 0;
+        service.setNetworkEnabled(true);
+        notifyGotIp();
+        service.tick();
+        assert(starts == 2);  // association without DHCP is insufficient
+        station_ip = 0x01020304;
+        esp_netif_t other_station;
+        ip_event_got_ip_t wrong_interface{&other_station, {{station_ip}, {}, {}}, true};
+        emit(IP_EVENT, IP_EVENT_STA_GOT_IP, &wrong_interface);
+        ip_event_got_ip_t old_address{&station, {{0x05060708}, {}, {}}, true};
+        emit(IP_EVENT, IP_EVENT_STA_GOT_IP, &old_address);
+        service.tick();
+        assert(starts == 2);
+
+        service.setNetworkEnabled(false);
+        disconnect_during_ip_read = true;
+        service.setNetworkEnabled(true);
+        assert(starts == 2 && !service.snapshot().network_available);
+        service.setNetworkEnabled(false);
+        station_up = station_associated = true;
+        now += 5 * SECOND_US;
+        service.setNetworkEnabled(true);  // valid already-connected observation
+        assert(starts == 3 && service.snapshot().syncing);
+        assert(service.snapshot().sync_generation == 1);
+        reply(BASE_EPOCH - 3600);  // success metadata follows monotonic receive time
+        service.tick();
+        assert(service.snapshot().sync_generation == 2);
+        assert(service.snapshot().last_successful_sync_us == now.load());
+        assert(service.snapshot().epoch_seconds == BASE_EPOCH - 3600);
+        service.setNetworkEnabled(true);
+        service.tick();
+        assert(starts == 3);  // enabling twice does not bypass the daily cadence
+        service.setNetworkEnabled(false);
+        now += 3 * DAY_US;
+        for (int i = 0; i < 1000; ++i) { notifyGotIp(); service.tick(); }
+        assert(starts == 3 && service.snapshot().sync_generation == 2);
+        assert(service.snapshot().valid && !service.snapshot().network_available);
+        puts("PASS: synchronous network gate, pre-begin disable, late callbacks/GOT_IP, live-interface observation and success metadata");
+        return 0;
+    }
+    if (argc > 1 && std::strcmp(argv[1], "network-gate-dns") == 0) {
+        assert(service.begin());
+        gotIp();
+        service.tick();
+        reply();
+        service.tick();
+        assert(service.snapshot().valid && service.snapshot().sync_generation == 1);
+        assert(service.snapshot().last_successful_sync_us == 0);  // zero is a valid monotonic instant
+        service.setNetworkEnabled(false);
+        dns_mode = DnsMode::Deferred;
+        now += SECOND_US;
+        service.setNetworkEnabled(true);
+        assert(pending_dns.size() == 1 && starts == 1);
+        service.setNetworkEnabled(false);
+        completeDns(0, true);  // late resolver response before any subsequent tick
+        notifyGotIp();
+        service.tick();
+        assert(starts == 1 && !service.snapshot().syncing && !service.snapshot().network_available);
+
+        service.setNetworkEnabled(true);
+        assert(pending_dns.size() == 1);
+        service.setNetworkEnabled(false);
+        service.setNetworkEnabled(true);
+        assert(pending_dns.size() == 2);
+        completeDns(0, true);  // old generation cannot start SNTP in the new window
+        service.tick();
+        assert(starts == 1 && service.snapshot().syncing);
+        completeDns(0, true);
+        service.tick();
+        assert(starts == 2);
+        reply(BASE_EPOCH + 60);
+        service.tick();
+        assert(service.snapshot().sync_generation == 2);
+        assert(service.snapshot().last_successful_sync_us == now.load());
+
+        service.setNetworkEnabled(false);
+        service.setNetworkEnabled(true);
+        completeDns(0, true);  // resolved address waiting in inbox is fenced too
+        service.setNetworkEnabled(false);
+        service.setNetworkEnabled(true, false);
+        service.tick();
+        assert(starts == 2 && !service.snapshot().syncing && !service.snapshot().network_available);
+
+        // Repeated toggles do not reuse contexts still owned by lwIP.
+        for (int i = 0; i < 3; ++i) {
+            service.setNetworkEnabled(false);
+            service.setNetworkEnabled(true);
+        }
+        assert(pending_dns.size() == 3);
+        const auto before_exhaustion = lookups;
+        service.setNetworkEnabled(false);
+        service.setNetworkEnabled(true);
+        assert(lookups == before_exhaustion && !service.snapshot().syncing);
+        service.setNetworkEnabled(false);
+        completeDns(0, true);
+        completeDns(0, false);
+        completeDns(0, true);
+        service.tick();
+        assert(starts == 2 && service.snapshot().sync_generation == 2);
+        service.setNetworkEnabled(true);
+        completeDns(0, true);
+        service.tick();
+        reply(BASE_EPOCH + 120);
+        service.tick();
+        assert(starts == 3 && service.snapshot().sync_generation == 3);
+        assert(service.snapshot().epoch_seconds == BASE_EPOCH + 120);
+        puts("PASS: network-gate DNS fencing, pending inbox cancellation, repeated-window generations and bounded context reuse");
+        return 0;
+    }
+    if (argc > 1 && std::strcmp(argv[1], "network-window") == 0) {
+        service.setNetworkEnabled(false);
+        assert(service.begin());
+        now = SECOND_US;
+        const auto first_deadline = now.load() + 90 * SECOND_US;
+        service.setNetworkEnabled(true, true, first_deadline);
+        now = first_deadline - 5 * SECOND_US;  // late association leaves only 5s
+        gotIp();
+        service.tick();
+        assert(starts == 1 && service.snapshot().syncing);
+        now = first_deadline;
+        reply();  // exact whole-window deadline, before the main loop runs
+        service.tick();
+        assert(!service.snapshot().valid && !service.snapshot().syncing && !service.snapshot().network_available);
+        assert(stops == 1 && service.snapshot().sync_generation == 0);
+        notifyGotIp();
+        service.tick();
+        assert(starts == 1);  // expiry closes the gate until a deliberate reopen
+        service.setNetworkEnabled(true, true, first_deadline);
+        assert(starts == 1);  // an already-expired window never starts work
+
+        service.setNetworkEnabled(true, true, now.load() + 90 * SECOND_US);
+        assert(starts == 2);
+        const auto shortened_deadline = now.load() + 2 * SECOND_US;
+        service.setNetworkEnabled(true, true, shortened_deadline);
+        assert(starts == 2);  // updating an enabled gate does not restart it
+        now = shortened_deadline;
+        reply();
+        service.tick();
+        assert(!service.snapshot().valid && stops == 2);
+
+        const auto short_deadline = now.load() + 2 * SECOND_US;
+        service.setNetworkEnabled(true, true, short_deadline);
+        assert(starts == 3);
+        ++now;
+        service.setNetworkEnabled(true);  // normal-mode restoration clears cutoff
+        now = short_deadline + SECOND_US;
+        reply(BASE_EPOCH);
+        service.tick();
+        assert(service.snapshot().valid && service.snapshot().sync_generation == 1);
+        assert(service.snapshot().last_successful_sync_us == now.load());
+
+        service.setNetworkEnabled(false);
+        const auto accepted_deadline = now.load() + 5 * SECOND_US;
+        service.setNetworkEnabled(true, true, accepted_deadline);
+        now = accepted_deadline - 1;
+        reply(BASE_EPOCH + 100);
+        now = accepted_deadline + SECOND_US;
+        service.tick();  // a timely reply remains accepted even if tick is late
+        assert(service.snapshot().sync_generation == 2 && !service.snapshot().network_available);
+        assert(service.snapshot().last_successful_sync_us == accepted_deadline - 1);
+        assert(service.snapshot().epoch_seconds == BASE_EPOCH + 101);
+
+        dns_mode = DnsMode::Deferred;
+        const auto dns_deadline = now.load() + 5 * SECOND_US;
+        service.setNetworkEnabled(true, true, dns_deadline);
+        assert(pending_dns.size() == 1);
+        const auto before_expired_dns = starts;
+        now = dns_deadline;
+        completeDns(0, true);
+        notifyGotIp();
+        service.tick();
+        assert(starts == before_expired_dns && !service.snapshot().network_available);
+        assert(service.snapshot().sync_generation == 2);
+
+        dns_mode = DnsMode::Immediate;
+        const auto dispatch_deadline = now.load() + 5 * SECOND_US;
+        // The second dispatch is native SNTP init; it can wait behind TCP/IP
+        // work until after the main task already checked the DNS result.
+        tcpip_calls_before_advance = 2;
+        advance_tcpip_to_us = dispatch_deadline;
+        service.setNetworkEnabled(true, true, dispatch_deadline);
+        assert(starts == before_expired_dns);
+        service.tick();
+        assert(!service.snapshot().network_available && !service.snapshot().syncing);
+        const auto before_expired_lookup = lookups;
+        tcpip_calls_before_advance = 1;
+        advance_tcpip_to_us = now.load() + SECOND_US;
+        service.setNetworkEnabled(true, true, advance_tcpip_to_us);
+        service.tick();
+        assert(lookups == before_expired_lookup && starts == before_expired_dns);
+        assert(service.snapshot().sync_generation == 2);
+        puts("PASS: exact whole-window deadline, late callbacks/DNS/TCP-IP dispatch, live deadline updates and accepted-response retention");
         return 0;
     }
     if (argc > 1 && std::strcmp(argv[1], "dns-lifecycle") == 0) {
@@ -379,12 +657,14 @@ int main(int argc, char** argv)
     assert(snapshot.local_time.tm_hour == 23 && snapshot.local_time.tm_min == 59 && snapshot.local_time.tm_sec == 59);
     assert(snapshot.local_time.tm_mday == 18);
     const auto accepted_at = now.load();
+    assert(service.nextMinuteDeadlineUs() == accepted_at + 100000);  // 23:59:59.900000 -> midnight
     const auto revision = snapshot.revision;
     now += 100000;
     snapshot = service.snapshot();
     assert(snapshot.epoch_seconds == BASE_EPOCH + 1 && snapshot.local_time.tm_mday == 19);
     assert(snapshot.local_time.tm_hour == 0 && snapshot.local_time.tm_min == 0);
     assert(snapshot.revision == revision);
+    assert(service.nextMinuteDeadlineUs() == accepted_at + 60 * SECOND_US + 100000);
     now = accepted_at + DAY_US - 1;
     service.tick();
     assert(starts == 5);
