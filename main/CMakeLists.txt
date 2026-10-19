@@ -1,5 +1,6 @@
 set(APP_SRCS
     "./clock/time_service.cpp"
+    "./clock/clock_fonts.cpp"
     "./network/wifi_manager.cpp"
     "./network/captive_dns.cpp"
     # HAL
@@ -9,6 +10,7 @@ set(APP_SRCS
     "./hal/hal_tf_card.cpp"
 
     # Applications
+    "./apps/app_clock/app_clock.cpp"
     "./apps/app_battery/app_battery.cpp"
     "./apps/app_button_feedback/app_button_feedback.cpp"
     "./apps/app_shutdown/app_shutdown.cpp"

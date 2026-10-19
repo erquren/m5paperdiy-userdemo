@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Generate the clock's pinned, grayscale bitmap fonts without host font lookup.
+
+Install main/assets/clock-fonts/requirements.txt, then run this file. --check
+verifies byte-for-byte reproducibility without writing generated output. The
+manifest also pins the native shaping/rasterizer versions shipped by Pillow.
+"""
+
+import argparse
+from dataclasses import dataclass
+import hashlib
+import io
+import json
+from pathlib import Path
+import sys
+
+import fontTools
+from fontTools.ttLib import TTFont
+import PIL
+from PIL import Image, ImageDraw, ImageFont, features
+
+
+ROOT = Path(__file__).resolve().parents[1]
+ASSETS = ROOT / "main/assets/clock-fonts"
+OUTPUT = ROOT / "main/clock"
+TIME_TEXT = "-0123456789:"
+DATE_TEXT = " 0123456789年月日星期一二三四五六"
+FOOTER_TEXT = "Erquren Clock"
+
+
+@dataclass
+class Glyph:
+    codepoint: int
+    left: int
+    top: int
+    width: int
+    height: int
+    advance_64: int
+    offset: int
+    image: Image.Image
+
+
+def verify_sources():
+    manifest = json.loads((ASSETS / "manifest.json").read_text())
+    actual = {"Pillow": PIL.__version__, "fontTools": fontTools.__version__}
+    for feature in ("freetype2", "raqm", "harfbuzz", "fribidi"):
+        actual[feature] = features.version(feature)
+    for name, expected in manifest["rasterizer"].items():
+        if actual[name] != expected:
+            raise ValueError(
+                f"{name} {actual[name]!r} != pinned {expected!r}. "
+                "Install main/assets/clock-fonts/requirements.txt with the "
+                "official Pillow wheel; see that directory's README.md."
+            )
+    for name, source in manifest["sources"].items():
+        digest = hashlib.sha256((ASSETS / name).read_bytes()).hexdigest()
+        if digest != source["sha256"]:
+            raise ValueError(f"Pinned source checksum failed: {name}")
+
+
+def load_font(name, size, required):
+    # FreeType cannot load WOFF directly on every host. Decode losslessly to
+    # sfnt in memory, preserving the preview's exact outlines and layout tables.
+    font = TTFont(ASSETS / name, recalcTimestamp=False)
+    missing = set(map(ord, required)) - font.getBestCmap().keys()
+    if missing:
+        raise ValueError(f"{name} lacks glyphs: {sorted(missing)}")
+    font.flavor = None
+    sfnt = io.BytesIO()
+    font.save(sfnt, reorderTables=False)
+    sfnt.seek(0)
+    return ImageFont.truetype(sfnt, size, layout_engine=ImageFont.Layout.RAQM)
+
+
+def rasterize(font, text, codepoint=0, offset=0):
+    # Use integer baseline origins and explicit LTR shaping. Rendering the footer
+    # as one string keeps its kerning and fractional glyph positioning intact.
+    kwargs = {"anchor": "ls", "direction": "ltr", "features": ["kern", "liga"]}
+    left, top, right, bottom = font.getbbox(text, **kwargs)
+    image = Image.new("L", (max(1, right - left), max(1, bottom - top)), 255)
+    ImageDraw.Draw(image).text((-left, -top), text, font=font, fill=0, **kwargs)
+    # Same round-to-nearest 16 luminance levels as the approved canvas preview.
+    # Quantize before cropping so the box describes actual visible stored ink.
+    image = image.point([((value + 8) // 17) * 17 for value in range(256)])
+    bounds = image.point(lambda value: 255 - value).getbbox()
+    advance = round(font.getlength(text, direction="ltr", features=["kern", "liga"]) * 64)
+    if bounds is None:
+        return Glyph(codepoint, 0, 0, 0, 0, advance, offset, Image.new("L", (0, 0)))
+    x, y, r, b = bounds
+    image = image.crop(bounds)
+    assert image.width == r - x and image.height == b - y
+    assert all(value % 17 == 0 for value in image.get_flattened_data())
+    return Glyph(codepoint, left + x, top + y, r - x, b - y, advance, offset, image)
+
+
+def pack_pixels(image):
+    levels = [value // 17 for value in image.get_flattened_data()]
+    # A glyph starts at a byte boundary; rows are contiguous even at odd widths.
+    # The final unused low nibble, if present, is white.
+    if len(levels) % 2:
+        levels.append(15)
+    return bytes((levels[i] << 4) | levels[i + 1] for i in range(0, len(levels), 2))
+
+
+def make_font(font, characters, overrides=None):
+    glyphs = []
+    pixels = bytearray()
+    for character in sorted(set(characters)):
+        source = (overrides or {}).get(character, font)
+        glyph = rasterize(source, character, ord(character), len(pixels))
+        glyphs.append(glyph)
+        pixels.extend(pack_pixels(glyph.image))
+    return glyphs, bytes(pixels)
+
+
+def byte_array(name, pixels, public=False):
+    storage = "" if public else "static "
+    rows = [f"{storage}const uint8_t {name}[] = {{"]
+    for i in range(0, len(pixels), 20):
+        rows.append("    " + ", ".join(f"0x{value:02x}" for value in pixels[i:i + 20]) + ",")
+    rows.append("};")
+    return "\n".join(rows)
+
+
+def glyph_row(glyph):
+    return (f"{{0x{glyph.codepoint:04x}, {glyph.left}, {glyph.top}, {glyph.width}, "
+            f"{glyph.height}, {glyph.advance_64}, {glyph.offset}}}")
+
+
+HEADER = """// Generated by tools/generate_clock_fonts.py. Do not edit by hand.
+// Font licenses and pinned source files: main/assets/clock-fonts/.
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+namespace clock_fonts {
+
+// Ink bounds relative to the alphabetic baseline. Advances are 1/64 pixel.
+// Glyphs are sorted by Unicode codepoint; a space has zero width/height.
+struct Glyph {
+    uint32_t codepoint;
+    int16_t left;
+    int16_t top;
+    uint16_t width;
+    uint16_t height;
+    int32_t advance_64;
+    uint32_t offset;
+};
+
+// Packed 4-bit luminance: 0 = black, 15 = white; high nibble first.
+// offset is in bytes, each glyph starts on a byte boundary, no row padding.
+struct Font {
+    const Glyph* glyphs;
+    size_t count;
+    const uint8_t* pixels;
+};
+
+extern const Font TIME;  // DejaVu Sans regular, 256 px, tabular digits.
+extern const Font DATE;  // Noto Sans CJK SC regular, 24 px.
+extern const Glyph FOOTER;  // Entire "Erquren Clock" at 20 px, with kerning.
+extern const uint8_t FOOTER_PIXELS[];
+
+}  // namespace clock_fonts
+"""
+
+
+def generate():
+    verify_sources()
+    sans = load_font("preview-dejavu-sans.woff", 256, TIME_TEXT.replace("-", ""))
+    hyphen = load_font("dejavu-sans-hyphen.woff", 256, "-")
+    cjk = load_font("preview-noto-sans-cjk-sc.woff", 24, DATE_TEXT)
+    footer_font = load_font("preview-dejavu-sans.woff", 20, FOOTER_TEXT)
+    time_glyphs, time_pixels = make_font(sans, TIME_TEXT, {"-": hyphen})
+    date_glyphs, date_pixels = make_font(cjk, DATE_TEXT)
+    footer = rasterize(footer_font, FOOTER_TEXT)
+    footer_pixels = pack_pixels(footer.image)
+    assert len({g.advance_64 for g in time_glyphs if 48 <= g.codepoint <= 57}) == 1
+    source = [
+        "// Generated by tools/generate_clock_fonts.py. Do not edit by hand.",
+        "// Font licenses and pinned source files: main/assets/clock-fonts/.",
+        '#include "clock_fonts.h"',
+        "", "namespace clock_fonts {", "",
+    ]
+    for name, glyphs, pixels in (("TIME", time_glyphs, time_pixels), ("DATE", date_glyphs, date_pixels)):
+        source += [byte_array(name + "_PIXELS", pixels), "", f"static const Glyph {name}_GLYPHS[] = {{"]
+        source += ["    " + glyph_row(glyph) + "," for glyph in glyphs]
+        source += ["};", f"const Font {name} = {{{name}_GLYPHS, {len(glyphs)}, {name}_PIXELS}};", ""]
+    source += [byte_array("FOOTER_PIXELS", footer_pixels, public=True), "",
+               "const Glyph FOOTER = " + glyph_row(footer) + ";", "",
+               "}  // namespace clock_fonts", ""]
+    outputs = {"clock_fonts.h": HEADER, "clock_fonts.cpp": "\n".join(source)}
+    info = {
+        "time_glyphs": len(time_glyphs), "date_glyphs": len(date_glyphs),
+        "packed_bytes": len(time_pixels) + len(date_pixels) + len(footer_pixels),
+        "footer_ink": [footer.width, footer.height],
+        "generated_sha256": {name: hashlib.sha256(text.encode()).hexdigest() for name, text in outputs.items()},
+    }
+    return outputs, info
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true", help="Compare outputs without modifying files")
+    args = parser.parse_args()
+    try:
+        outputs, info = generate()
+        for name, text in outputs.items():
+            path = OUTPUT / name
+            if args.check:
+                if not path.exists() or path.read_bytes() != text.encode():
+                    raise ValueError(f"Generated asset is stale: {path.relative_to(ROOT)}")
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(text.encode())
+        print(("Verified" if args.check else "Generated") + " clock font assets")
+        print(json.dumps(info, indent=2))
+    except (OSError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

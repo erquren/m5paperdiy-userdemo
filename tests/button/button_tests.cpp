@@ -27,6 +27,7 @@ struct Counts {
     std::vector<unsigned> a;
     std::vector<unsigned> b;
     std::vector<unsigned> long_a;
+    std::vector<unsigned> triple_b;
 };
 struct Simulation {
     Hal hal;
@@ -41,6 +42,7 @@ struct Simulation {
     std::function<std::uint8_t(unsigned)> pins;
     std::function<void(Simulation&)> observe;
     std::function<bool(unsigned)> poll_long = [](unsigned) { return true; };
+    std::function<bool(unsigned)> poll_triple = [](unsigned) { return true; };
 };
 Simulation* current = nullptr;
 std::uint8_t held(unsigned time, unsigned begin, unsigned end, std::uint8_t buttons)
@@ -49,7 +51,8 @@ std::uint8_t held(unsigned time, unsigned begin, unsigned end, std::uint8_t butt
 }
 Counts run(unsigned duration, std::function<std::uint8_t(unsigned)> pins,
            std::function<void(Simulation&)> observe = {}, TickType_t base = 0,
-           std::function<bool(unsigned)> poll_long = [](unsigned) { return true; })
+           std::function<bool(unsigned)> poll_long = [](unsigned) { return true; },
+           std::function<bool(unsigned)> poll_triple = [](unsigned) { return true; })
 {
     Simulation simulation;
     simulation.duration = duration;
@@ -57,6 +60,7 @@ Counts run(unsigned duration, std::function<std::uint8_t(unsigned)> pins,
     simulation.observe = observe;
     simulation.base = base;
     simulation.poll_long = poll_long;
+    simulation.poll_triple = poll_triple;
     simulation.raw = pins(0);
     current = &simulation;
     require(simulation.hal.initButtonInput(), "button task creation failed");
@@ -69,11 +73,12 @@ Counts run(unsigned duration, std::function<std::uint8_t(unsigned)> pins,
     current = nullptr;
     return simulation.counts;
 }
-void expect(const Counts& result, unsigned a, unsigned b, unsigned long_a)
+void expect(const Counts& result, unsigned a, unsigned b, unsigned long_a, unsigned triple_b = 0)
 {
     require(result.a.size() == a, "unexpected short-A count: " + std::to_string(result.a.size()));
     require(result.b.size() == b, "unexpected short-B count: " + std::to_string(result.b.size()));
     require(result.long_a.size() == long_a, "unexpected long-A count: " + std::to_string(result.long_a.size()));
+    require(result.triple_b.size() == triple_b, "unexpected triple-B count: " + std::to_string(result.triple_b.size()));
 }
 }
 
@@ -101,6 +106,7 @@ void vTaskDelay(TickType_t ticks)
     if (s.hal.wasButtonAClicked()) s.counts.a.push_back(s.elapsed);
     if (s.hal.wasButtonBClicked()) s.counts.b.push_back(s.elapsed);
     if (s.poll_long(s.elapsed) && s.hal.wasButtonALongPressed()) s.counts.long_a.push_back(s.elapsed);
+    if (s.poll_triple(s.elapsed) && s.hal.wasButtonBTripleClicked()) s.counts.triple_b.push_back(s.elapsed);
     if (s.elapsed >= s.duration) throw StopSimulation{};
     s.elapsed += ticks;
     s.raw = s.pins(s.elapsed);
@@ -232,6 +238,230 @@ int main()
     });
     test("initial chord cannot trigger long A after B release", [] {
         expect(run(6000, [](unsigned t) { return held(t, 0, 4500, A) | held(t, 0, 500, B); }), 1, 0, 0);
+    });
+    test("three short B releases produce exactly one triple with no short B", [] {
+        const auto result = run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B);
+        });
+        expect(result, 0, 0, 0, 1);
+        require(result.triple_b[0] == 410, "triple did not fire on third debounced release");
+    });
+    test("double B retains coalesced single fallback after final release", [] {
+        const auto result = run(1600, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B);
+        });
+        expect(result, 0, 1, 0);
+        require(result.b[0] == 1050, "double B fallback deadline wrong");
+    });
+    test("triple accepts exact 400-ms release gaps and 800-ms total", [] {
+        const auto result = run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 420, 480, B) | held(t, 820, 880, B);
+        });
+        expect(result, 0, 0, 0, 1);
+        require(result.triple_b[0] == 890, "inclusive triple boundary wrong");
+    });
+    test("release gap over 400 ms rejects triple", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 422, 482, B) | held(t, 580, 640, B);
+        }), 0, 1, 0);
+    });
+    test("three independent slow B clicks remain three singles", [] {
+        expect(run(3600, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 1200, 1260, B) | held(t, 2400, 2460, B);
+        }), 0, 3, 0);
+    });
+    test("third B held past 400 ms is not a triple", [] {
+        expect(run(2400, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 300, 800, B);
+        }), 0, 1, 0);
+    });
+    test("long first B is not counted toward following two clicks", [] {
+        expect(run(2400, [](unsigned t) {
+            return held(t, 20, 520, B) | held(t, 600, 660, B) | held(t, 740, 800, B);
+        }), 0, 1, 0);
+    });
+    test("held B cannot auto-repeat into a triple", [] {
+        expect(run(9000, [](unsigned t) { return held(t, 20, 7000, B); }), 0, 1, 0);
+    });
+    test("B held at startup does not seed a triple", [] {
+        expect(run(1600, [](unsigned t) {
+            return held(t, 0, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B);
+        }), 0, 1, 0);
+    });
+    test("B bounce cannot create extra clicks or disturb valid triple", [] {
+        expect(run(2000, [](unsigned t) {
+            return held(t, 20, 24, B) | held(t, 28, 32, B) | held(t, 40, 80, B) |
+                   held(t, 84, 88, B) | held(t, 180, 240, B) | held(t, 244, 248, B) |
+                   held(t, 340, 400, B);
+        }), 0, 0, 0, 1);
+    });
+    test("four rapid clicks produce one triple and no trailing single", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 500, 560, B);
+        }), 0, 0, 0, 1);
+    });
+    test("six rapid clicks stay one train until a quiet interval", [] {
+        expect(run(2500, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 500, 560, B) | held(t, 660, 720, B) | held(t, 820, 880, B);
+        }), 0, 0, 0, 1);
+    });
+    test("single after 400-ms quiet interval works normally", [] {
+        const auto result = run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 900, 960, B);
+        });
+        expect(result, 0, 1, 0, 1);
+        require(result.b[0] == 1770, "post-triple single delay changed");
+    });
+    test("two separated triple gestures can enter and leave clock", [] {
+        expect(run(2500, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 900, 960, B) | held(t, 1060, 1120, B) | held(t, 1220, 1280, B);
+        }), 0, 0, 0, 2);
+    });
+    test("application mode suppression keeps fourth-click guard", [] {
+        expect(run(2400, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 500, 560, B);
+        }, [](Simulation& s) {
+            if (s.elapsed == 412) s.hal.suppressButtonActionsUntilRelease();
+        }), 0, 0, 0, 1);
+    });
+    test("suppression clears a partially counted triple", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B);
+        }, [](Simulation& s) {
+            if (s.elapsed == 260) s.hal.suppressButtonActionsUntilRelease();
+        }), 0, 1, 0);
+    });
+    test("suppression during third hold prevents both triple and release single", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B);
+        }, [](Simulation& s) {
+            if (s.elapsed == 380) s.hal.suppressButtonActionsUntilRelease();
+        }), 0, 0, 0);
+    });
+    test("suppression clears an unconsumed triple event", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B);
+        }, [](Simulation& s) {
+            if (s.elapsed == 500) s.hal.suppressButtonActionsUntilRelease();
+        }, 0, [](unsigned) { return true; }, [](unsigned t) { return t >= 600; }), 0, 0, 0);
+    });
+    test("A press interrupts partial B triple counting", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 100, 140, A) | held(t, 180, 240, B) |
+                   held(t, 340, 400, B);
+        }), 0, 1, 0);
+    });
+    test("B chord release never counts as a triple click", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 80, A | B) | held(t, 180, 240, B) | held(t, 340, 400, B);
+        }), 0, 1, 0);
+    });
+    test("unarmed chord interrupts B candidate while retaining B fallback", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, A | B);
+        }), 0, 1, 0);
+    });
+    test("armed shutdown chord cancels partial B triple and all fallbacks", [] {
+        expect(run(4800, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 3000, A | B);
+        }, [](Simulation& s) {
+            if (s.elapsed == 2000) s.hal.suppressButtonActionsUntilRelease();
+        }), 0, 0, 0);
+    });
+    test("chord clears unconsumed triple before mode transition", [] {
+        expect(run(2500, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 500, 800, A | B);
+        }, {}, 0, [](unsigned) { return true; }, [](unsigned t) { return t >= 900; }), 0, 1, 0);
+    });
+    test("shutdown clears an unconsumed triple", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B);
+        }, [](Simulation& s) {
+            if (s.elapsed == 500) s.hal.beginShutdown();
+        }, 0, [](unsigned) { return true; }, [](unsigned t) { return t >= 600; }), 0, 0, 0);
+    });
+    test("shutdown during third press blocks triple and release action", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B);
+        }, [](Simulation& s) {
+            if (s.elapsed == 380) s.hal.beginShutdown();
+        }), 0, 0, 0);
+    });
+    test("pending triple is an interaction and survives delayed consumer", [] {
+        const auto result = run(1800, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B);
+        }, [](Simulation& s) {
+            if (s.elapsed == 1000) require(s.hal.isButtonInteractionActive(), "pending triple lost");
+            if (s.elapsed == 1202) require(!s.hal.isButtonInteractionActive(), "consumed triple still active");
+        }, 0, [](unsigned) { return true; }, [](unsigned t) { return t >= 1200; });
+        expect(result, 0, 0, 0, 1);
+        require(result.triple_b[0] == 1200, "delayed triple consumption wrong");
+    });
+    test("fourth click cannot overwrite unconsumed triple", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 500, 560, B);
+        }, {}, 0, [](unsigned) { return true; }, [](unsigned t) { return t >= 1200; }), 0, 0, 0, 1);
+    });
+    test("later B cannot overwrite unconsumed triple after cooldown", [] {
+        expect(run(2600, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 1000, 1060, B);
+        }, {}, 0, [](unsigned) { return true; }, [](unsigned t) { return t >= 2000; }), 0, 0, 0, 1);
+    });
+    test("triple window and cooldown work across tick rollover", [] {
+        expect(run(2500, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 500, 560, B) | held(t, 1100, 1160, B) | held(t, 1260, 1320, B) |
+                   held(t, 1420, 1480, B);
+        }, {}, UINT32_MAX - 250), 0, 0, 0, 2);
+    });
+    test("B fallback deadline works across tick rollover", [] {
+        const auto result = run(1500, [](unsigned t) { return held(t, 20, 120, B); }, {}, UINT32_MAX - 500);
+        expect(result, 0, 1, 0);
+        require(result.b[0] == 930, "B rollover delay changed");
+    });
+    test("first B hold exactly 400 ms can begin a triple", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 420, B) | held(t, 500, 560, B) | held(t, 640, 700, B);
+        }), 0, 0, 0, 1);
+    });
+    test("first B hold longer than 400 ms cannot begin a triple", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 422, B) | held(t, 500, 560, B) | held(t, 640, 700, B);
+        }), 0, 1, 0);
+    });
+    test("400-ms quiet boundary re-arms the next press", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 810, 870, B);
+        }), 0, 1, 0, 1);
+    });
+    test("press before quiet boundary remains absorbed through a long hold", [] {
+        expect(run(3000, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 808, 1500, B);
+        }), 0, 0, 0, 1);
+    });
+    test("A short still works immediately after triple", [] {
+        expect(run(2200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 500, 600, A);
+        }), 1, 0, 0, 1);
+    });
+    test("A three-second hold still works immediately after triple", [] {
+        const auto result = run(5200, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 500, 4000, A);
+        });
+        expect(result, 0, 0, 1, 1);
+        require(result.long_a[0] == 3510, "post-triple long A threshold changed");
     });
     std::cout << passed << " production button tests passed\n";
 }

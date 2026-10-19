@@ -24,4 +24,40 @@ PASS short deadline works across tick rollover
 PASS long threshold works across tick rollover
 PASS A already held when task starts is recognized
 PASS initial chord cannot trigger long A after B release
-26 production button tests passed
+PASS three short B releases produce exactly one triple with no short B
+PASS double B retains coalesced single fallback after final release
+PASS triple accepts exact 400-ms release gaps and 800-ms total
+PASS release gap over 400 ms rejects triple
+PASS three independent slow B clicks remain three singles
+PASS third B held past 400 ms is not a triple
+PASS long first B is not counted toward following two clicks
+PASS held B cannot auto-repeat into a triple
+PASS B held at startup does not seed a triple
+PASS B bounce cannot create extra clicks or disturb valid triple
+PASS four rapid clicks produce one triple and no trailing single
+PASS six rapid clicks stay one train until a quiet interval
+PASS single after 400-ms quiet interval works normally
+PASS two separated triple gestures can enter and leave clock
+PASS application mode suppression keeps fourth-click guard
+PASS suppression clears a partially counted triple
+PASS suppression during third hold prevents both triple and release single
+PASS suppression clears an unconsumed triple event
+PASS A press interrupts partial B triple counting
+PASS B chord release never counts as a triple click
+PASS unarmed chord interrupts B candidate while retaining B fallback
+PASS armed shutdown chord cancels partial B triple and all fallbacks
+PASS chord clears unconsumed triple before mode transition
+PASS shutdown clears an unconsumed triple
+PASS shutdown during third press blocks triple and release action
+PASS pending triple is an interaction and survives delayed consumer
+PASS fourth click cannot overwrite unconsumed triple
+PASS later B cannot overwrite unconsumed triple after cooldown
+PASS triple window and cooldown work across tick rollover
+PASS B fallback deadline works across tick rollover
+PASS first B hold exactly 400 ms can begin a triple
+PASS first B hold longer than 400 ms cannot begin a triple
+PASS 400-ms quiet boundary re-arms the next press
+PASS press before quiet boundary remains absorbed through a long hold
+PASS A short still works immediately after triple
+PASS A three-second hold still works immediately after triple
+62 production button tests passed

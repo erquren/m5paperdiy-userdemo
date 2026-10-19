@@ -6,6 +6,7 @@
 #pragma once
 
 #include <app_battery/app_battery.h>
+#include <app_clock/app_clock.h>
 #include <app_button_feedback/app_button_feedback.h>
 #include <app_shutdown/app_shutdown.h>
 #include <app_tf_card/app_tf_card.h>

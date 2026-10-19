@@ -68,6 +68,8 @@ extern "C" void app_main(void)
 
     // Install data apps before the shutdown controller so its modal state is
     // evaluated after the normal application updates in each frame.
+    // Clock mode owns gestures before underlying apps can consume short clicks.
+    mooncake::GetMooncake().installApp(std::make_unique<AppClock>());
     mooncake::GetMooncake().installApp(std::make_unique<AppWifiScan>());
     mooncake::GetMooncake().installApp(std::make_unique<AppBattery>());
     mooncake::GetMooncake().installApp(std::make_unique<AppTfCard>());

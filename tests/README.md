@@ -7,6 +7,8 @@ From the repository root:
 
 ```sh
 bash tests/button/run.sh
+bash tests/clock/run.sh
+bash tests/clock_ui/run.sh
 # Requires ESP-IDF v5.5.1 sources for its actual cJSON implementation:
 export IDF_PATH=/path/to/esp-idf
 bash tests/run_network_host.sh
@@ -29,3 +31,6 @@ support its process inspection. AddressSanitizer and UBSan remain enabled.
 See `frontend/README.md` for the separate browser suite. That suite could not run
 in the cloud environment because Chromium could not start; no browser-layout
 or device-run success is claimed.
+
+- Clock UI tests compile the production renderer/font pixels and the actual AppClock/WifiScan applications with bounded platform mocks. They test all 1,440 clock times, exact 16-level grayscale, Chinese glyph availability, minute and date transitions, hidden AP expiry, input isolation, PSRAM allocation failure and repeated restoration. Set CLOCK_RENDER_DIR to an output folder to save sample/unsynchronized PGM images.
+- Pinned font provenance, licenses and deterministic regeneration are documented in `main/assets/clock-fonts/README.md`.

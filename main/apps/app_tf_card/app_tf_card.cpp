@@ -5,6 +5,7 @@
  */
 #include "app_tf_card.h"
 #include <app_wifi_scan/app_wifi_scan.h>
+#include <app_clock/app_clock.h>
 
 #include <LGFX_Fonts.hpp>
 #include <cstdio>
@@ -74,7 +75,7 @@ void AppTfCard::onOpen()
 
 void AppTfCard::onRunning()
 {
-    if (AppWifiScan::isModal()) return;
+    if (AppWifiScan::isModal() || AppClock::isActive()) return;
     if (_test_done.exchange(false, std::memory_order_acq_rel)) {
         _test_running = false;
         drawInfo();

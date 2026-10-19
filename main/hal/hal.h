@@ -56,6 +56,9 @@ public:
     bool isButtonInteractionActive();
     bool wasButtonAClicked();
     bool wasButtonBClicked();
+    // Three B-only clicks: holds <=400 ms, releases <=400 ms apart and <=800 ms
+    // total. Suppresses the single-B action and extra clicks until 400 ms idle.
+    bool wasButtonBTripleClicked();
     // Consume the one-shot event from holding A alone for three seconds.
     bool wasButtonALongPressed();
     // Clear queued actions and ignore the current press until all buttons are released.
@@ -92,8 +95,8 @@ public:
 private:
     /* --------------------------------- Button --------------------------------- */
     bool initButtonInput();
-    void scheduleButtonAction(ButtonId button);
-    bool consumeButtonAction(ButtonId button);
+    void scheduleButtonAction(std::uint8_t action);
+    bool consumeButtonAction(std::uint8_t expected_action);
     static void buttonInputTask(void* argument);
 
     std::atomic<std::uint8_t> _button_state_bits{0};

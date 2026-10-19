@@ -1,0 +1,41 @@
+{
+  "preview": {
+    "path": "paperdiy-clock-preview/dist/index.html",
+    "sha256": "806c58684092f518635ac529cecb5ce7b742cbfac6730c1aba36d3959126210d"
+  },
+  "rasterizer": {
+    "Pillow": "12.3.0",
+    "fontTools": "4.61.1",
+    "freetype2": "2.14.3",
+    "raqm": "0.10.5",
+    "harfbuzz": "14.2.1",
+    "fribidi": "1.0.16"
+  },
+  "sources": {
+    "preview-dejavu-sans.woff": {
+      "sha256": "48c861bad474292d1f589846350556e1b4decac971d98bf4d1e720e1c035d7a5",
+      "family": "DejaVu Sans",
+      "version": "2.37",
+      "source": "Exact ClockSans WOFF extracted from approved preview; https://dejavu-fonts.github.io/",
+      "license": "LICENSE-DejaVu.txt",
+      "copyright": "Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved.\nCopyright (c) 2006 by Tavmjong Bah. All Rights Reserved.\nDejaVu changes are in public domain"
+    },
+    "preview-noto-sans-cjk-sc.woff": {
+      "sha256": "29e07e2a1075839afc90e72e56e4ec75cdb06c13f81ed9f530a6cd654a0c7922",
+      "family": "Noto Sans CJK SC",
+      "version": "2.004",
+      "source": "Exact ClockCJK WOFF extracted from approved preview; https://github.com/notofonts/noto-cjk",
+      "license": "LICENSE-Noto.txt",
+      "copyright": "© 2014-2021 Adobe (http://www.adobe.com/)."
+    },
+    "dejavu-sans-hyphen.woff": {
+      "sha256": "95425be0876a81d5ccd545698eccc476a548a48e714b2f3fb6d5d9e9bdf68ad8",
+      "family": "DejaVu Sans",
+      "version": "2.37",
+      "source": "U+002D subset from /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf; https://dejavu-fonts.github.io/",
+      "original_sha256": "57f73e11f51999432bf7ab22ce55b6f945d5eca1bf824404cfa9ec2e3718c84e",
+      "license": "LICENSE-DejaVu.txt",
+      "copyright": "Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved.\nCopyright (c) 2006 by Tavmjong Bah. All Rights Reserved.\nDejaVu changes are in public domain"
+    }
+  }
+}

@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 #include "app_wifi_scan.h"
-#include <clock/time_service.h>
 #include <app_shutdown/app_shutdown.h>
+#include <app_clock/app_clock.h>
+#include <clock/time_service.h>
 #include <LGFX_Fonts.hpp>
 #include <cstdio>
 #include <esp_heap_caps.h>
@@ -37,14 +38,21 @@ void AppWifiScan::onRunning()
     TimeService::instance().tick();
     // Keep networking alive, but never paint over the shutdown overlay.
     if (AppShutdown::isDialogOpen() || hal.isShutdownInProgress()) return;
+    const bool long_a = hal.wasButtonALongPressed();
+    if (AppClock::isActive()) {
+        // AP expiry/success still advances above. Defer its framebuffer restore
+        // until clock exit so a hidden setup cannot paint over the clock.
+        if (!long_a) return;
+        AppClock::leaveForSystemAction();
+    }
     if (isModal()) {
         // Restore the normal screen before the existing A+B shutdown dialog opens.
         if ((hal.isButtonPressed(ButtonId::A) && hal.isButtonPressed(ButtonId::B)) ||
-            hal.wasButtonBClicked() || hal.wasButtonALongPressed()) {
+            hal.wasButtonBClicked() || long_a) {
             wifi.stopProvisioning();
         }
         if (!wifi.provisioning()) leaveSetup();
-    } else if (hal.wasButtonALongPressed()) {
+    } else if (long_a) {
         enterSetup();
     } else if (hal.wasButtonAClicked()) {
         _local_error.clear();
