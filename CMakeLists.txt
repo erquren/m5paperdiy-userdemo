@@ -8,3 +8,8 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # "Trim" the build. Include the minimal set of components, main, and anything it depends on.
 idf_build_set_property(MINIMAL_BUILD ON)
 project(PaperDIY)
+
+# Correlate SNTP responses with the current server and request timestamp.
+# This must apply to lwIP itself, not only the application translation unit.
+idf_component_get_property(lwip_lib lwip COMPONENT_LIB)
+target_compile_definitions(${lwip_lib} PRIVATE SNTP_CHECK_RESPONSE=2)

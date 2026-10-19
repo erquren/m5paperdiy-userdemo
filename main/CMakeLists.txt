@@ -1,4 +1,5 @@
 set(APP_SRCS
+    "./clock/time_service.cpp"
     "./network/wifi_manager.cpp"
     "./network/captive_dns.cpp"
     # HAL

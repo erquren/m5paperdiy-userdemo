@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "app_wifi_scan.h"
+#include <clock/time_service.h>
 #include <app_shutdown/app_shutdown.h>
 #include <LGFX_Fonts.hpp>
 #include <cstdio>
@@ -22,7 +23,10 @@ std::string clipped(const std::string& text, int width)
 void AppWifiScan::onCreate() { setAppInfo().name = "AppWifiScan"; open(); }
 void AppWifiScan::onOpen()
 {
-    if (WifiManager::instance().begin()) WifiManager::instance().requestScan();
+    if (WifiManager::instance().begin()) {
+        TimeService::instance().begin();
+        WifiManager::instance().requestScan();
+    }
     _revision = UINT32_MAX;
 }
 void AppWifiScan::onRunning()
@@ -30,6 +34,7 @@ void AppWifiScan::onRunning()
     auto& hal = GetHAL();
     auto& wifi = WifiManager::instance();
     wifi.tick();
+    TimeService::instance().tick();
     // Keep networking alive, but never paint over the shutdown overlay.
     if (AppShutdown::isDialogOpen() || hal.isShutdownInProgress()) return;
     if (isModal()) {
