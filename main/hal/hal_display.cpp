@@ -3,7 +3,8 @@
  *
  * SPDX-License-Identifier: MIT
  */
-#include "hal.h"
+#include <hal.h>
+#include <clock/clock_power.h>
 
 #include <algorithm>
 
@@ -33,13 +34,18 @@ bool Hal::flushDisplayRegion(std::int32_t x, std::int32_t y, std::int32_t width,
         flushFullDisplay(m5gfx::epd_mode_t::epd_quality);
         return true;
     }
+    ClockPowerGuard power;
     display.setEpdMode(mode);
     display.display(x, y, width, height);
+    // The EPD worker is asynchronous. Keep CPU/awake locks and DisplayGuard
+    // until the COMPLETE waveform ends and the driver turns its boost off.
+    display.waitDisplay();
     return false;
 }
 
 void Hal::flushFullDisplay(m5gfx::epd_mode_t mode)
 {
+    ClockPowerGuard power;
     display.setEpdMode(mode);
     display.display(0, 0, display.width(), display.height());
     // Callers hold DisplayGuard; keep it locked until the full waveform completes.

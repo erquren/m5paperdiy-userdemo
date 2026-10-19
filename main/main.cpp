@@ -7,6 +7,7 @@
 #include <apps.h>
 #include <cstddef>
 #include <cstdint>
+#include <clock/clock_power.h>
 #include <esp_log.h>
 #include <hal.h>
 #include <memory>
@@ -59,6 +60,8 @@ extern "C" void app_main(void)
         }
     }
 
+    ClockPower::instance().begin();
+
     // A blank production NVS shows the shipping logo once, records the marker,
     // and powers the unit off before any normal application is started.
     AppShutdown::handleFactoryBoot();
@@ -86,9 +89,10 @@ extern "C" void app_main(void)
     }
 
     while (true) {
+        ClockPower::instance().beginFrame();
         M5.update();
         mooncake::GetMooncake().update();
         refreshDisplay();
-        GetHAL().feedTheDog();
+        ClockPower::instance().idle();
     }
 }

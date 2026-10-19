@@ -1,4 +1,5 @@
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <iostream>
@@ -28,6 +29,11 @@ struct Counts {
     std::vector<unsigned> b;
     std::vector<unsigned> long_a;
     std::vector<unsigned> triple_b;
+    unsigned idle_waits = 0;
+    unsigned poll_waits = 0;
+    unsigned main_notifications = 0;
+    bool wake_ready = false;
+    bool ended_idle = false;
 };
 struct Simulation {
     Hal hal;
@@ -39,12 +45,36 @@ struct Simulation {
     TaskFunction_t task = nullptr;
     void* argument = nullptr;
     Counts counts;
+    std::array<gpio_isr_t, 2> handlers{};
+    std::array<void*, 2> handler_arguments{};
+    std::array<bool, 2> interrupts_enabled{};
+    unsigned notifications = 0;
+    unsigned last_observation = UINT32_MAX;
+    bool before_wait_called = false;
+    std::function<void(Simulation&)> before_wait;
+    std::function<void(Simulation&, gpio_num_t)> before_enable;
     std::function<std::uint8_t(unsigned)> pins;
     std::function<void(Simulation&)> observe;
     std::function<bool(unsigned)> poll_long = [](unsigned) { return true; };
     std::function<bool(unsigned)> poll_triple = [](unsigned) { return true; };
 };
 Simulation* current = nullptr;
+bool simulate_idle_mode = false;
+int fail_handler_pin = -1;
+int fail_enable_pin = -1;
+bool existing_isr_service = false;
+std::function<void(Simulation&)> configure_simulation;
+TaskHandle_t inputHandle() { return reinterpret_cast<TaskHandle_t>(1); }
+TaskHandle_t mainHandle() { return reinterpret_cast<TaskHandle_t>(2); }
+unsigned pinIndex(gpio_num_t pin) { return pin == GPIO_NUM_4 ? 0 : 1; }
+void deliverInterrupts(Simulation& s)
+{
+    for (unsigned i = 0; i < 2; ++i) {
+        if (s.interrupts_enabled[i] && s.handlers[i] && (s.raw & (1U << i))) {
+            s.handlers[i](s.handler_arguments[i]);
+        }
+    }
+}
 std::uint8_t held(unsigned time, unsigned begin, unsigned end, std::uint8_t buttons)
 {
     return time >= begin && time < end ? buttons : 0;
@@ -62,14 +92,19 @@ Counts run(unsigned duration, std::function<std::uint8_t(unsigned)> pins,
     simulation.poll_long = poll_long;
     simulation.poll_triple = poll_triple;
     simulation.raw = pins(0);
+    if (configure_simulation) configure_simulation(simulation);
     current = &simulation;
     require(simulation.hal.initButtonInput(), "button task creation failed");
     require(simulation.task != nullptr, "no task created");
+    simulation.hal.setButtonWakeTask(mainHandle());
+    simulation.hal.setButtonIdleMode(simulate_idle_mode);
     try {
         simulation.task(simulation.argument);
     } catch (const StopSimulation&) {
     }
     require(simulation.critical_depth == 0, "critical section left locked");
+    simulation.counts.wake_ready = simulation.hal.buttonWakeReady();
+    simulation.counts.ended_idle = simulation.hal.isButtonIdle();
     current = nullptr;
     return simulation.counts;
 }
@@ -92,31 +127,115 @@ void testExitCritical(portMUX_TYPE*)
 {
     require(--current->critical_depth == 0, "unbalanced critical section");
 }
-BaseType_t xTaskCreatePinnedToCore(TaskFunction_t task, const char*, unsigned int, void* argument, int, void*, int)
+BaseType_t xTaskCreatePinnedToCore(TaskFunction_t task, const char*, unsigned int, void* argument, int, TaskHandle_t* handle, int)
 {
     current->task = task;
     current->argument = argument;
+    if (handle) *handle = inputHandle();
     return pdPASS;
 }
-void vTaskDelay(TickType_t ticks)
+esp_err_t gpio_install_isr_service(int) { return existing_isr_service ? ESP_ERR_INVALID_STATE : ESP_OK; }
+esp_err_t gpio_set_intr_type(gpio_num_t, gpio_int_type_t) { return ESP_OK; }
+esp_err_t gpio_isr_handler_add(gpio_num_t pin, gpio_isr_t handler, void* argument)
+{
+    if (pin == fail_handler_pin) return ESP_FAIL;
+    const auto index = pinIndex(pin);
+    current->handlers[index] = handler;
+    current->handler_arguments[index] = argument;
+    current->interrupts_enabled[index] = true;
+    deliverInterrupts(*current);
+    return ESP_OK;
+}
+esp_err_t gpio_isr_handler_remove(gpio_num_t pin)
+{
+    current->handlers[pinIndex(pin)] = nullptr;
+    current->interrupts_enabled[pinIndex(pin)] = false;
+    return ESP_OK;
+}
+esp_err_t gpio_intr_enable(gpio_num_t pin)
+{
+    if (pin == fail_enable_pin) return ESP_FAIL;
+    if (current->before_enable) current->before_enable(*current, pin);
+    current->interrupts_enabled[pinIndex(pin)] = true;
+    deliverInterrupts(*current);
+    return ESP_OK;
+}
+esp_err_t gpio_intr_disable(gpio_num_t pin)
+{
+    current->interrupts_enabled[pinIndex(pin)] = false;
+    return ESP_OK;
+}
+void xTaskNotifyGive(TaskHandle_t handle)
+{
+    if (handle == inputHandle()) ++current->notifications;
+    else if (handle == mainHandle()) ++current->counts.main_notifications;
+}
+void vTaskNotifyGiveFromISR(TaskHandle_t handle, BaseType_t* woken)
+{
+    xTaskNotifyGive(handle);
+    *woken = pdTRUE;
+}
+void observeCurrent()
 {
     auto& s = *current;
     require(s.critical_depth == 0, "task delays inside critical section");
+    if (s.last_observation == s.elapsed) return;
+    s.last_observation = s.elapsed;
     if (s.observe) s.observe(s);
     if (s.hal.wasButtonAClicked()) s.counts.a.push_back(s.elapsed);
     if (s.hal.wasButtonBClicked()) s.counts.b.push_back(s.elapsed);
     if (s.poll_long(s.elapsed) && s.hal.wasButtonALongPressed()) s.counts.long_a.push_back(s.elapsed);
     if (s.poll_triple(s.elapsed) && s.hal.wasButtonBTripleClicked()) s.counts.triple_b.push_back(s.elapsed);
     if (s.elapsed >= s.duration) throw StopSimulation{};
+}
+void advanceTime(TickType_t ticks)
+{
+    auto& s = *current;
     s.elapsed += ticks;
     s.raw = s.pins(s.elapsed);
+    deliverInterrupts(s);
+}
+void vTaskDelay(TickType_t ticks)
+{
+    require(ticks > 0, "zero tick polling delay");
+    ++current->counts.poll_waits;
+    observeCurrent();
+    advanceTime(ticks);
+}
+std::uint32_t ulTaskNotifyTake(BaseType_t clear, TickType_t timeout)
+{
+    auto& s = *current;
+    require(clear == pdTRUE && timeout == portMAX_DELAY, "unexpected idle wait");
+    ++s.counts.idle_waits;
+    if (s.before_wait && !s.before_wait_called && s.notifications == 0) {
+        s.before_wait_called = true;
+        s.before_wait(s);
+    }
+    while (s.notifications == 0) {
+        observeCurrent();
+        if (s.notifications == 0) advanceTime(2);
+    }
+    const auto result = s.notifications;
+    s.notifications = 0;
+    return result;
 }
 
 int main()
 {
     unsigned passed = 0;
     auto test = [&](const char* name, const std::function<void()>& body) {
-        try { body(); ++passed; std::cout << "PASS " << name << '\n'; }
+        try {
+            for (const bool idle : {false, true}) {
+                simulate_idle_mode = idle;
+                fail_handler_pin = -1;
+                fail_enable_pin = -1;
+                existing_isr_service = false;
+                configure_simulation = {};
+                body();
+            }
+            ++passed;
+            std::cout << "PASS " << name << " (polling + clock idle)\n";
+        }
         catch (const std::exception& error) {
             std::cerr << "FAIL " << name << ": " << error.what() << '\n';
             throw;
@@ -462,6 +581,110 @@ int main()
         });
         expect(result, 0, 0, 1, 1);
         require(result.long_a[0] == 3510, "post-triple long A threshold changed");
+    });
+    test("clock idle blocks without periodic input polling; normal mode stays fast", [] {
+        const auto result = run(10000, [](unsigned) { return 0; });
+        require(result.wake_ready, "interrupts not ready");
+        if (simulate_idle_mode) {
+            require(result.idle_waits > 0 && result.idle_waits <= 2, "idle did not block indefinitely");
+            require(result.poll_waits == 0 && result.ended_idle, "clock idle kept polling");
+        } else {
+            require(result.idle_waits == 0 && result.poll_waits >= 5000, "normal polling changed");
+            require(!result.ended_idle, "normal mode advertised sleep eligibility");
+        }
+    });
+    test("press while idle clears sleep eligibility before main notification", [] {
+        const auto result = run(1400, [](unsigned t) { return held(t, 100, 200, B); }, [](Simulation& s) {
+            if (s.elapsed == 100) {
+                require(!s.hal.isButtonIdle(), "ISR did not clear sticky idle state");
+                require(s.counts.main_notifications > 0, "main task not notified by first press");
+                require(!s.interrupts_enabled[0] && !s.interrupts_enabled[1], "held-low IRQ storm possible");
+            }
+        });
+        expect(result, 0, 1, 0);
+    });
+    test("first press arriving between final pin sample and wait is not lost", [] {
+        simulate_idle_mode = true;
+        configure_simulation = [](Simulation& s) {
+            s.before_wait = [](Simulation& active) {
+                active.raw = B;
+                deliverInterrupts(active);
+            };
+        };
+        const auto result = run(1600, [](unsigned t) {
+            return held(t, 2, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B);
+        });
+        expect(result, 0, 0, 0, 1);
+        require(result.triple_b[0] == 410, "first wake press did not seed triple");
+    });
+    test("press already low during interrupt rearm is not lost", [] {
+        simulate_idle_mode = true;
+        configure_simulation = [](Simulation& s) {
+            s.before_enable = [](Simulation& active, gpio_num_t pin) {
+                if (active.elapsed == 0 && pin == GPIO_NUM_3) active.raw = B;
+            };
+        };
+        expect(run(1600, [](unsigned t) {
+            return held(t, 2, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B);
+        }), 0, 0, 0, 1);
+    });
+    test("completed triple returns to interrupt wait only after quiet guard", [] {
+        simulate_idle_mode = true;
+        expect(run(2500, [](unsigned t) {
+            return held(t, 20, 80, B) | held(t, 180, 240, B) | held(t, 340, 400, B) |
+                   held(t, 1200, 1260, B) | held(t, 1360, 1420, B) | held(t, 1520, 1580, B);
+        }, [](Simulation& s) {
+            if (s.elapsed == 600) require(!s.hal.isButtonIdle(), "post-triple guard slept early");
+            if (s.elapsed == 1000) require(s.hal.isButtonIdle(), "input failed to rearm after guard");
+        }), 0, 0, 0, 2);
+    });
+    test("mode exit wakes blocked input and restores normal polling", [] {
+        simulate_idle_mode = true;
+        const auto result = run(1400, [](unsigned t) { return held(t, 200, 300, B); }, [](Simulation& s) {
+            if (s.elapsed == 100) s.hal.setButtonIdleMode(false);
+        });
+        expect(result, 0, 1, 0);
+        require(result.poll_waits >= 600 && !result.ended_idle, "input remained blocked after clock exit");
+    });
+    test("suppression and shutdown wake a blocked input task", [] {
+        simulate_idle_mode = true;
+        const auto result = run(1500, [](unsigned t) { return held(t, 200, 300, B); }, [](Simulation& s) {
+            if (s.elapsed == 100) {
+                s.hal.suppressButtonActionsUntilRelease();
+                require(!s.hal.isButtonIdle(), "suppression retained stale idle state");
+            }
+            if (s.elapsed == 400) s.hal.beginShutdown();
+        });
+        expect(result, 0, 0, 0);
+        require(!result.ended_idle, "shutdown became sleep eligible");
+    });
+    test("existing GPIO ISR service can be shared", [] {
+        existing_isr_service = true;
+        const auto result = run(1200, [](unsigned t) { return held(t, 20, 120, B); });
+        expect(result, 0, 1, 0);
+        require(result.wake_ready, "existing service incorrectly rejected");
+    });
+    test("missing A interrupt falls back to polling without claiming wake readiness", [] {
+        fail_handler_pin = GPIO_NUM_4;
+        const auto result = run(1200, [](unsigned t) { return held(t, 20, 120, B); });
+        expect(result, 0, 1, 0);
+        require(!result.wake_ready && result.idle_waits == 0, "missing IRQ enabled sleeping");
+    });
+    test("missing B interrupt removes A handler and keeps gesture polling", [] {
+        fail_handler_pin = GPIO_NUM_3;
+        const auto result = run(1200, [](unsigned t) { return held(t, 20, 120, A); }, [](Simulation& s) {
+            require(s.handlers[0] == nullptr, "partial interrupt setup not cleaned up");
+        });
+        expect(result, 1, 0, 0);
+        require(!result.wake_ready && result.idle_waits == 0, "partial IRQ setup enabled sleeping");
+    });
+    test("interrupt rearm failure fails closed and restores polling", [] {
+        simulate_idle_mode = true;
+        fail_enable_pin = GPIO_NUM_3;
+        const auto result = run(1200, [](unsigned t) { return held(t, 20, 120, B); });
+        expect(result, 0, 1, 0);
+        require(!result.wake_ready && result.idle_waits == 0, "rearm failure enabled sleeping");
+        require(result.main_notifications > 0, "rearm failure did not wake main");
     });
     std::cout << passed << " production button tests passed\n";
 }

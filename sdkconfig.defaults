@@ -17,3 +17,14 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 
 # Begin SNTP on a fresh station IP without the optional random startup delay.
 CONFIG_LWIP_SNTP_STARTUP_DELAY=n
+
+# Clock-only automatic light sleep; keep PSRAM and USB debug available.
+CONFIG_PM_ENABLE=y
+CONFIG_PM_DFS_INIT_AUTO=n
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
+# Retain the SDK GPIO-reset workaround; ClockPower preserves only board buses
+# and gpio_wakeup_enable preserves A/B. Other pins keep SDK sleep isolation.
+CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND=y
+CONFIG_PM_SLP_DISABLE_GPIO=y
+CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <freertos/task.h>
 #include <sdmmc_cmd.h>
 #include <string>
 
@@ -54,6 +55,12 @@ public:
     /* --------------------------------- Button --------------------------------- */
     bool isButtonPressed(ButtonId button) const;
     bool isButtonInteractionActive();
+    // Clock-only idle waiting. A failed interrupt setup leaves normal polling
+    // active and must prevent the application from sleeping until a button.
+    bool buttonWakeReady() const;
+    bool isButtonIdle();
+    void setButtonIdleMode(bool enabled);
+    void setButtonWakeTask(TaskHandle_t task);
     bool wasButtonAClicked();
     bool wasButtonBClicked();
     // Three B-only clicks: holds <=400 ms, releases <=400 ms apart and <=800 ms
@@ -98,8 +105,15 @@ private:
     void scheduleButtonAction(std::uint8_t action);
     bool consumeButtonAction(std::uint8_t expected_action);
     static void buttonInputTask(void* argument);
+    static void buttonInterrupt(void* argument);
+    void wakeButtonTasks();
 
     std::atomic<std::uint8_t> _button_state_bits{0};
+    std::atomic<bool> _button_interrupt_ready{false};
+    std::atomic<bool> _button_idle_mode{false};
+    std::atomic<bool> _button_input_idle{false};
+    TaskHandle_t _button_input_task = nullptr;
+    std::atomic<TaskHandle_t> _button_wake_task{nullptr};
     std::atomic<bool> _suppress_button_actions_until_release{false};
     portMUX_TYPE _button_action_mux     = portMUX_INITIALIZER_UNLOCKED;
     std::uint8_t _pending_button_action = 0;

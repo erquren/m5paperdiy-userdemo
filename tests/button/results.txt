@@ -1,63 +1,74 @@
-PASS short A retains 800-ms action delay
-PASS short B retains 800-ms action delay
-PASS A fires once at three seconds while still held, no release click
-PASS release before threshold cannot fire during release debounce
-PASS A at threshold then released produces only long event
-PASS debounce rejects press and release chatter
-PASS holding B alone never produces long A
-PASS chord before three seconds cancels A timer until full release
-PASS B pressed at A threshold blocks long event during chord debounce
-PASS chord clears already pending long A and suppresses its short release
-PASS B first then chord never rearms long A while A stays down
-PASS unarmed chord keeps existing last-release B behavior
-PASS simultaneous unarmed chord release keeps existing B preference
-PASS armed shutdown chord cancellation produces no button actions
-PASS suppression clears pending short actions and permits a later press
-PASS suppression during A hold cancels long and short until release
-PASS suppression during initial press debounce waits for full release
-PASS provisioning entry/exit suppression does not leak the release
-PASS suppression clears an unconsumed long event
-PASS long event remains consumable after release and counts as interaction
-PASS shutdown cancels queued actions and disables long press
-PASS shutdown clears a pending long event
-PASS short deadline works across tick rollover
-PASS long threshold works across tick rollover
-PASS A already held when task starts is recognized
-PASS initial chord cannot trigger long A after B release
-PASS three short B releases produce exactly one triple with no short B
-PASS double B retains coalesced single fallback after final release
-PASS triple accepts exact 400-ms release gaps and 800-ms total
-PASS release gap over 400 ms rejects triple
-PASS three independent slow B clicks remain three singles
-PASS third B held past 400 ms is not a triple
-PASS long first B is not counted toward following two clicks
-PASS held B cannot auto-repeat into a triple
-PASS B held at startup does not seed a triple
-PASS B bounce cannot create extra clicks or disturb valid triple
-PASS four rapid clicks produce one triple and no trailing single
-PASS six rapid clicks stay one train until a quiet interval
-PASS single after 400-ms quiet interval works normally
-PASS two separated triple gestures can enter and leave clock
-PASS application mode suppression keeps fourth-click guard
-PASS suppression clears a partially counted triple
-PASS suppression during third hold prevents both triple and release single
-PASS suppression clears an unconsumed triple event
-PASS A press interrupts partial B triple counting
-PASS B chord release never counts as a triple click
-PASS unarmed chord interrupts B candidate while retaining B fallback
-PASS armed shutdown chord cancels partial B triple and all fallbacks
-PASS chord clears unconsumed triple before mode transition
-PASS shutdown clears an unconsumed triple
-PASS shutdown during third press blocks triple and release action
-PASS pending triple is an interaction and survives delayed consumer
-PASS fourth click cannot overwrite unconsumed triple
-PASS later B cannot overwrite unconsumed triple after cooldown
-PASS triple window and cooldown work across tick rollover
-PASS B fallback deadline works across tick rollover
-PASS first B hold exactly 400 ms can begin a triple
-PASS first B hold longer than 400 ms cannot begin a triple
-PASS 400-ms quiet boundary re-arms the next press
-PASS press before quiet boundary remains absorbed through a long hold
-PASS A short still works immediately after triple
-PASS A three-second hold still works immediately after triple
-62 production button tests passed
+PASS short A retains 800-ms action delay (polling + clock idle)
+PASS short B retains 800-ms action delay (polling + clock idle)
+PASS A fires once at three seconds while still held, no release click (polling + clock idle)
+PASS release before threshold cannot fire during release debounce (polling + clock idle)
+PASS A at threshold then released produces only long event (polling + clock idle)
+PASS debounce rejects press and release chatter (polling + clock idle)
+PASS holding B alone never produces long A (polling + clock idle)
+PASS chord before three seconds cancels A timer until full release (polling + clock idle)
+PASS B pressed at A threshold blocks long event during chord debounce (polling + clock idle)
+PASS chord clears already pending long A and suppresses its short release (polling + clock idle)
+PASS B first then chord never rearms long A while A stays down (polling + clock idle)
+PASS unarmed chord keeps existing last-release B behavior (polling + clock idle)
+PASS simultaneous unarmed chord release keeps existing B preference (polling + clock idle)
+PASS armed shutdown chord cancellation produces no button actions (polling + clock idle)
+PASS suppression clears pending short actions and permits a later press (polling + clock idle)
+PASS suppression during A hold cancels long and short until release (polling + clock idle)
+PASS suppression during initial press debounce waits for full release (polling + clock idle)
+PASS provisioning entry/exit suppression does not leak the release (polling + clock idle)
+PASS suppression clears an unconsumed long event (polling + clock idle)
+PASS long event remains consumable after release and counts as interaction (polling + clock idle)
+PASS shutdown cancels queued actions and disables long press (polling + clock idle)
+PASS shutdown clears a pending long event (polling + clock idle)
+PASS short deadline works across tick rollover (polling + clock idle)
+PASS long threshold works across tick rollover (polling + clock idle)
+PASS A already held when task starts is recognized (polling + clock idle)
+PASS initial chord cannot trigger long A after B release (polling + clock idle)
+PASS three short B releases produce exactly one triple with no short B (polling + clock idle)
+PASS double B retains coalesced single fallback after final release (polling + clock idle)
+PASS triple accepts exact 400-ms release gaps and 800-ms total (polling + clock idle)
+PASS release gap over 400 ms rejects triple (polling + clock idle)
+PASS three independent slow B clicks remain three singles (polling + clock idle)
+PASS third B held past 400 ms is not a triple (polling + clock idle)
+PASS long first B is not counted toward following two clicks (polling + clock idle)
+PASS held B cannot auto-repeat into a triple (polling + clock idle)
+PASS B held at startup does not seed a triple (polling + clock idle)
+PASS B bounce cannot create extra clicks or disturb valid triple (polling + clock idle)
+PASS four rapid clicks produce one triple and no trailing single (polling + clock idle)
+PASS six rapid clicks stay one train until a quiet interval (polling + clock idle)
+PASS single after 400-ms quiet interval works normally (polling + clock idle)
+PASS two separated triple gestures can enter and leave clock (polling + clock idle)
+PASS application mode suppression keeps fourth-click guard (polling + clock idle)
+PASS suppression clears a partially counted triple (polling + clock idle)
+PASS suppression during third hold prevents both triple and release single (polling + clock idle)
+PASS suppression clears an unconsumed triple event (polling + clock idle)
+PASS A press interrupts partial B triple counting (polling + clock idle)
+PASS B chord release never counts as a triple click (polling + clock idle)
+PASS unarmed chord interrupts B candidate while retaining B fallback (polling + clock idle)
+PASS armed shutdown chord cancels partial B triple and all fallbacks (polling + clock idle)
+PASS chord clears unconsumed triple before mode transition (polling + clock idle)
+PASS shutdown clears an unconsumed triple (polling + clock idle)
+PASS shutdown during third press blocks triple and release action (polling + clock idle)
+PASS pending triple is an interaction and survives delayed consumer (polling + clock idle)
+PASS fourth click cannot overwrite unconsumed triple (polling + clock idle)
+PASS later B cannot overwrite unconsumed triple after cooldown (polling + clock idle)
+PASS triple window and cooldown work across tick rollover (polling + clock idle)
+PASS B fallback deadline works across tick rollover (polling + clock idle)
+PASS first B hold exactly 400 ms can begin a triple (polling + clock idle)
+PASS first B hold longer than 400 ms cannot begin a triple (polling + clock idle)
+PASS 400-ms quiet boundary re-arms the next press (polling + clock idle)
+PASS press before quiet boundary remains absorbed through a long hold (polling + clock idle)
+PASS A short still works immediately after triple (polling + clock idle)
+PASS A three-second hold still works immediately after triple (polling + clock idle)
+PASS clock idle blocks without periodic input polling; normal mode stays fast (polling + clock idle)
+PASS press while idle clears sleep eligibility before main notification (polling + clock idle)
+PASS first press arriving between final pin sample and wait is not lost (polling + clock idle)
+PASS press already low during interrupt rearm is not lost (polling + clock idle)
+PASS completed triple returns to interrupt wait only after quiet guard (polling + clock idle)
+PASS mode exit wakes blocked input and restores normal polling (polling + clock idle)
+PASS suppression and shutdown wake a blocked input task (polling + clock idle)
+PASS existing GPIO ISR service can be shared (polling + clock idle)
+PASS missing A interrupt falls back to polling without claiming wake readiness (polling + clock idle)
+PASS missing B interrupt removes A handler and keeps gesture polling (polling + clock idle)
+PASS interrupt rearm failure fails closed and restores polling (polling + clock idle)
+73 production button tests passed

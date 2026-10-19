@@ -30,6 +30,8 @@ bool Hal::init()
     config.internal_imu  = false;
     config.internal_mic  = false;
     config.internal_spk  = false;
+    // A/B are handled by the debounced GPIO task; do not poll M5PM1 keys.
+    config.pmic_button   = false;
     M5.begin(config);
 
     _display_mutex = xSemaphoreCreateMutex();

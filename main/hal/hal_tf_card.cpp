@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "hal.h"
+#include <clock/clock_power.h>
 
 #include <cerrno>
 #include <cstdio>
@@ -219,6 +220,8 @@ void Hal::unmountTfCard()
 /* -------------------------------------------------------------------------- */
 TfBenchmarkResult Hal::benchmarkTfCard()
 {
+    // The benchmark can outlive the gesture that enters clock mode.
+    ClockPowerGuard power;
     TfBenchmarkResult result;
     if (_tf_card == nullptr || _tf_card_info.status != TfCardStatus::Mounted) {
         result.message = "CARD NOT READY";

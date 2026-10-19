@@ -6,6 +6,7 @@
 #include "hal.h"
 
 #include <driver/gpio.h>
+#include <esp_err.h>
 #include <freertos/task.h>
 
 namespace {
@@ -44,8 +45,70 @@ bool Hal::initButtonInput()
 {
     _button_state_bits.store(readButtonBits(), std::memory_order_release);
     const BaseType_t created =
-        xTaskCreatePinnedToCore(buttonInputTask, "button_input", 2048, this, tskIDLE_PRIORITY + 4, nullptr, 1);
-    return created == pdPASS;
+        xTaskCreatePinnedToCore(buttonInputTask, "button_input", 2048, this, tskIDLE_PRIORITY + 4, &_button_input_task, 1);
+    if (created != pdPASS) return false;
+
+    // The pins are already configured as pulled-up inputs by M5Unified. Keep
+    // their routing/pulls intact and share an existing GPIO ISR service if any.
+    const esp_err_t service = gpio_install_isr_service(0);
+    if (service != ESP_OK && service != ESP_ERR_INVALID_STATE) return true;
+    // GPIO wakeup and runtime interrupts share the interrupt-type register.
+    // Use low-level for both; the ISR masks it until gesture polling settles.
+    if (gpio_set_intr_type(BUTTON_A_PIN, GPIO_INTR_LOW_LEVEL) != ESP_OK ||
+        gpio_set_intr_type(BUTTON_B_PIN, GPIO_INTR_LOW_LEVEL) != ESP_OK) return true;
+    if (gpio_isr_handler_add(BUTTON_A_PIN, buttonInterrupt, this) != ESP_OK) return true;
+    if (gpio_isr_handler_add(BUTTON_B_PIN, buttonInterrupt, this) != ESP_OK) {
+        gpio_isr_handler_remove(BUTTON_A_PIN);
+        return true;
+    }
+    _button_interrupt_ready.store(true, std::memory_order_release);
+    return true;
+}
+
+void Hal::buttonInterrupt(void* argument)
+{
+    auto* hal = static_cast<Hal*>(argument);
+    gpio_intr_disable(BUTTON_A_PIN);
+    gpio_intr_disable(BUTTON_B_PIN);
+    // Clear before notifying either core: a main task that was preparing to
+    // wait must see the press even before its debounce state becomes stable.
+    hal->_button_input_idle.store(false, std::memory_order_release);
+    BaseType_t higher_priority_woken = pdFALSE;
+    if (hal->_button_input_task) vTaskNotifyGiveFromISR(hal->_button_input_task, &higher_priority_woken);
+    const auto main_task = hal->_button_wake_task.load(std::memory_order_acquire);
+    if (main_task) vTaskNotifyGiveFromISR(main_task, &higher_priority_woken);
+    if (higher_priority_woken) portYIELD_FROM_ISR();
+}
+
+void Hal::wakeButtonTasks()
+{
+    _button_input_idle.store(false, std::memory_order_release);
+    if (_button_input_task) xTaskNotifyGive(_button_input_task);
+    const auto main_task = _button_wake_task.load(std::memory_order_acquire);
+    if (main_task) xTaskNotifyGive(main_task);
+}
+
+bool Hal::buttonWakeReady() const
+{
+    return _button_interrupt_ready.load(std::memory_order_acquire);
+}
+
+void Hal::setButtonWakeTask(TaskHandle_t task)
+{
+    _button_wake_task.store(task, std::memory_order_release);
+}
+
+void Hal::setButtonIdleMode(bool enabled)
+{
+    if (_button_idle_mode.exchange(enabled, std::memory_order_acq_rel) != enabled) wakeButtonTasks();
+}
+
+bool Hal::isButtonIdle()
+{
+    return buttonWakeReady() && _button_idle_mode.load(std::memory_order_acquire) &&
+        _button_input_idle.load(std::memory_order_acquire) && readButtonBits() == 0 &&
+        !_suppress_button_actions_until_release.load(std::memory_order_acquire) &&
+        !isShutdownInProgress() && !isButtonInteractionActive();
 }
 
 void Hal::buttonInputTask(void* argument)
@@ -69,6 +132,7 @@ void Hal::buttonInputTask(void* argument)
     hal->_button_state_bits.store(stable_bits, std::memory_order_release);
 
     while (true) {
+        hal->_button_input_idle.store(false, std::memory_order_release);
         const TickType_t now        = xTaskGetTickCount();
         const std::uint8_t raw_bits = readButtonBits();
         if (hal->_shutdown_in_progress.load(std::memory_order_acquire)) {
@@ -203,6 +267,33 @@ void Hal::buttonInputTask(void* argument)
             portEXIT_CRITICAL(&hal->_button_action_mux);
         }
 
+        // Keep the existing two-millisecond timing through every debounce,
+        // hold, pending action and post-triple suppression window. Only the
+        // completely quiescent clock case waits for a GPIO notification.
+        const bool b_window_active = b_click_count != 0 &&
+            now - b_last_released_at <= pdMS_TO_TICKS(BUTTON_B_CLICK_GAP_MS) &&
+            now - b_first_clicked_at <= pdMS_TO_TICKS(BUTTON_B_TRIPLE_MAX_MS);
+        if (hal->_button_idle_mode.load(std::memory_order_acquire) && hal->buttonWakeReady() &&
+            raw_bits == 0 && stable_bits == 0 && candidate_bits == 0 && !chord_active &&
+            !b_train_suppressed && !b_window_active &&
+            !hal->_suppress_button_actions_until_release.load(std::memory_order_acquire) &&
+            !hal->isButtonInteractionActive()) {
+            hal->_button_input_idle.store(true, std::memory_order_release);
+            if (gpio_intr_enable(BUTTON_A_PIN) != ESP_OK || gpio_intr_enable(BUTTON_B_PIN) != ESP_OK) {
+                hal->_button_interrupt_ready.store(false, std::memory_order_release);
+                hal->wakeButtonTasks();
+                continue;
+            }
+            // A held-low pin fires immediately on re-arm. A press between this
+            // final sample and blocking leaves a notification pending, so it
+            // cannot be lost. Never clear notifications before this recheck.
+            if (readButtonBits() == 0 && hal->_button_idle_mode.load(std::memory_order_acquire) &&
+                !hal->_suppress_button_actions_until_release.load(std::memory_order_acquire)) {
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+                continue;
+            }
+            hal->_button_input_idle.store(false, std::memory_order_release);
+        }
         vTaskDelay(pdMS_TO_TICKS(BUTTON_POLL_MS));
     }
 }
@@ -307,6 +398,7 @@ void Hal::suppressButtonActionsUntilRelease()
     _suppress_button_actions_until_release.store(true, std::memory_order_release);
     _pending_button_action = BUTTON_ACTION_NONE;
     portEXIT_CRITICAL(&_button_action_mux);
+    wakeButtonTasks();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -319,6 +411,7 @@ void Hal::beginShutdown()
     _suppress_button_actions_until_release.store(true, std::memory_order_release);
     _pending_button_action = BUTTON_ACTION_NONE;
     portEXIT_CRITICAL(&_button_action_mux);
+    wakeButtonTasks();
 }
 
 bool Hal::isShutdownInProgress() const

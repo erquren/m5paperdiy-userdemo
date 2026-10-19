@@ -10,6 +10,7 @@
 #include <hal.h>
 #include <app_wifi_scan/app_wifi_scan.h>
 #include <app_clock/app_clock.h>
+#include <clock/clock_power.h>
 
 namespace {
 
@@ -78,7 +79,11 @@ void ButtonFeedback::feedbackTask(void* argument)
     auto* feedback = static_cast<ButtonFeedback*>(argument);
     while (true) {
         auto& hal = GetHAL();
-        if (hal.isShutdownInProgress() || AppWifiScan::isModal() || AppClock::isActive()) {
+        if (AppClock::isActive()) {
+            ClockPower::instance().waitForClockExit();
+            continue;
+        }
+        if (hal.isShutdownInProgress() || AppWifiScan::isModal()) {
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }

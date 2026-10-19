@@ -1,0 +1,15 @@
+PASS production clock PM policy, deadlines, debug/failure gates, work locks, EPD completion and feedback wake
+PASS safe awake fallback: no-button-wake
+PASS safe awake fallback: no-mutex
+PASS safe awake fallback: create-failure
+PASS safe awake fallback: initial-lock-failure
+PASS safe awake fallback: gpio-a-failure
+PASS safe awake fallback: gpio-b-failure
+PASS safe awake fallback: first-retention-failure
+PASS safe awake fallback: last-retention-failure
+PASS safe awake fallback: wake-enable-failure
+PASS safe awake fallback: config-failure
+PASS work-lock failure fixes CPU at maximum and prohibits sleep
+PASS release failure stays awake
+PASS wake reacquire failure disables further sleep/DFS
+PASS safe awake fallback: pm-disabled

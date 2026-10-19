@@ -9,7 +9,9 @@ for app in ('app_battery', 'app_tf_card'):
     assert 'if (AppWifiScan::isModal() || AppClock::isActive()) return;' in read(f'main/apps/{app}/{app}.cpp')
 feedback = read('main/apps/app_button_feedback/app_button_feedback.cpp')
 assert '!hal.isShutdownInProgress() && !AppWifiScan::isModal() && !AppClock::isActive()' in feedback
-assert 'hal.isShutdownInProgress() || AppWifiScan::isModal() || AppClock::isActive()' in feedback
+assert 'hal.isShutdownInProgress() || AppWifiScan::isModal()' in feedback
+assert 'ClockPower::instance().waitForClockExit()' in feedback
+assert feedback.index('if (AppClock::isActive())') < feedback.index('vTaskDelay')
 ui = read('main/apps/app_wifi_scan/app_wifi_scan.cpp')
 assert 'MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT' in ui
 assert 'd.readRect(0, 0, _saved_width, _saved_height, _saved_pixels)' in ui
@@ -44,3 +46,16 @@ print("PASS: clock ordering, landscape ownership, short-click isolation, time li
 assert "ClockRadio::instance().setActive(true)" in clock
 assert "ClockRadio::instance().setActive(false)" in clock
 assert "./clock/clock_radio.cpp" in cmake
+
+power=read('main/clock/clock_power.cpp')
+assert 'ClockPower::instance().idle()' in main
+assert 'config.pmic_button' in read('main/hal/hal.cpp')
+assert 'ClockPowerGuard power;' in read('main/hal/hal_display.cpp')
+assert 'ClockPowerGuard power;' in read('main/hal/hal_tf_card.cpp')
+assert 'esp_pm_configure' in power and 'gpio_wakeup_enable' in power
+assert 'esp_deep_sleep_start' not in power
+print('PASS: clock power integration, blocking feedback, waveform/TF guards and PMIC polling')
+
+loop=main[main.index('    while (true) {', main.index('// Run the initial Mooncake')):]
+assert loop.index('ClockPower::instance().beginFrame()') < loop.index('M5.update()') < loop.index('mooncake::GetMooncake().update()')
+assert loop.index('refreshDisplay()') < loop.index('ClockPower::instance().idle()')

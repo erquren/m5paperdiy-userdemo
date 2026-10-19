@@ -1,6 +1,7 @@
 set(APP_SRCS
     "./clock/time_service.cpp"
     "./clock/clock_radio.cpp"
+    "./clock/clock_power.cpp"
     "./clock/clock_fonts.cpp"
     "./network/wifi_manager.cpp"
     "./network/captive_dns.cpp"
@@ -26,7 +27,7 @@ set(APP_INCLUDE_DIRS
 )
 
 idf_component_register(SRCS "main.cpp" ${APP_SRCS}
-                    PRIV_REQUIRES esp_http_server json lwip esp_timer M5GFX M5Unified mooncake LGFX_Fonts esp_wifi esp_event esp_netif nvs_flash fatfs sdmmc esp_driver_sdspi esp_driver_spi
+                    PRIV_REQUIRES esp_pm esp_hw_support esp_driver_gpio esp_driver_usb_serial_jtag esp_http_server json lwip esp_timer M5GFX M5Unified mooncake LGFX_Fonts esp_wifi esp_event esp_netif nvs_flash fatfs sdmmc esp_driver_sdspi esp_driver_spi
                     INCLUDE_DIRS ${APP_INCLUDE_DIRS}
                     EMBED_FILES
                         "assets/img_bg.png"
